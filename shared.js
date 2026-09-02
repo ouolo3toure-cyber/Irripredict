@@ -274,58 +274,51 @@ function StackedAreaChart({ monthly }) {
   );
 }
 
-/* ---------------- Authentification (Netlify Identity) ---------------- */
+/* ---------------- Authentification (mot de passe simple) ----------------
+   Choix délibéré après échec de Netlify Identity sur navigateurs mobiles
+   (widget en iframe peu fiable, bug documenté sur Chrome/Samsung Internet).
+   Ce n'est pas un système de comptes individuels, juste un mot de passe
+   partagé qui fonctionne de façon fiable partout. sessionStorage est
+   partagé entre toutes les pages de ce site (même origine), donc l'accès
+   se déverrouille une fois pour toute la session de navigation. */
+const SITE_PASSWORD = "hydro2026"; // <-- change cette valeur si besoin
+const SESSION_KEY = "irripredict_unlocked";
+
 function IdentityGate({ children }) {
-  const [user, setUser] = useState(null);
-  const [ready, setReady] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
-    if (!window.netlifyIdentity) { setReady(true); return; }
-    const id = window.netlifyIdentity;
-    id.on("init", (u) => { setUser(u); setReady(true); });
-    id.on("login", (u) => { setUser(u); id.close(); });
-    id.on("logout", () => setUser(null));
-    id.init();
-  }, []);
+  if (unlocked) return children;
 
-  if (!ready) return <div className="min-h-screen bg-[#0f2537]"></div>;
-
-  if (!window.netlifyIdentity) {
-    return (
-      <div className="min-h-screen bg-[#0f2537] flex items-center justify-center px-4">
-        <div className="w-full max-w-sm bg-white rounded-2xl p-8 shadow-xl text-center">
-          <div className="text-xs font-bold uppercase tracking-widest text-red-500 mb-1">Erreur</div>
-          <p className="text-sm text-[#60707d]">Le module de connexion n'a pas pu se charger (vérifie ta connexion internet).</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-[#0f2537] flex items-center justify-center px-4">
-        <div className="w-full max-w-sm bg-white rounded-2xl p-8 shadow-xl text-center">
-          <div className="text-xs font-bold uppercase tracking-widest text-[#1d6f5b] mb-1">Accès restreint</div>
-          <h1 className="text-xl font-bold text-[#17324d] mb-5">Calculateur hydro-agricole</h1>
-          <p className="text-sm text-[#60707d] mb-5">Connecte-toi avec le compte qui t'a été fourni.</p>
-          <button onClick={() => window.netlifyIdentity.open("login")}
-            className="w-full bg-[#1d6f5b] text-white rounded-lg py-2.5 font-semibold hover:bg-[#175a4a] transition-colors">
-            Se connecter
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const submit = (e) => {
+    e.preventDefault();
+    if (input === SITE_PASSWORD) {
+      sessionStorage.setItem(SESSION_KEY, "1");
+      setUnlocked(true);
+    } else {
+      setError(true);
+    }
+  };
 
   return (
-    <div>
-      <div className="fixed top-2 right-2 z-50">
-        <button onClick={() => window.netlifyIdentity.logout()}
-          className="text-xs bg-white/95 border border-[#dce5e1] rounded-lg px-3 py-1.5 text-[#60707d] hover:text-[#17324d] shadow-md">
-          {user.email} · Déconnexion
+    <div className="min-h-screen bg-[#0f2537] flex items-center justify-center px-4">
+      <form onSubmit={submit} className="w-full max-w-sm bg-white rounded-2xl p-8 shadow-xl">
+        <div className="text-xs font-bold uppercase tracking-widest text-[#1d6f5b] mb-1">Accès restreint</div>
+        <h1 className="text-xl font-bold text-[#17324d] mb-5">Calculateur hydro-agricole</h1>
+        <input
+          type="password"
+          autoFocus
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setError(false); }}
+          placeholder="Mot de passe"
+          className={`w-full rounded-lg border px-3 py-2.5 font-mono mb-2 focus:outline-none focus:ring-2 focus:ring-[#1d6f5b] ${error ? "border-red-400" : "border-[#dce5e1]"}`}
+        />
+        {error && <p className="text-xs text-red-500 mb-3">Mot de passe incorrect.</p>}
+        <button type="submit" className="w-full bg-[#1d6f5b] text-white rounded-lg py-2.5 font-semibold mt-2 hover:bg-[#175a4a] transition-colors">
+          Accéder
         </button>
-      </div>
-      {children}
+      </form>
     </div>
   );
 }
