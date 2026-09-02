@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conception réseau | Calculateur hydro-agricole</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2317324d'/%3E%3Cpath d='M50 20 C35 45 25 55 25 68 A25 25 0 0 0 75 68 C75 55 65 45 50 20Z' fill='%231d6f5b'/%3E%3C/svg%3E">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+<style>
+  body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.js"></script>
+<script type="text/babel">
+
+function DripForm({ largeur, longueur, di, onChange }) {
+  const [sens, setSens] = useState(di.sens ?? "Largeur");
+  const [modeIrrigation, setModeIrrigation] = useState(di.modeIrrigation ?? 2);
+  const [effMotopompe, setEffMotopompe] = useState(di.effMotopompe ?? 0.75);
+  const [qGoutteur, setQGoutteur] = useState(di.qGoutteur ?? 2.2);
+  const [distLigne, setDistLigne] = useState(di.distLigne ?? 1);
+  const [distGoutteur, setDistGoutteur] = useState(di.distGoutteur ?? 0.5);
+  const [conserverDebit, setConserverDebit] = useState(di.conserverDebit ?? "Oui");
+
+  const dripInputs = { sens, modeIrrigation, effMotopompe, qGoutteur, distLigne, distGoutteur, conserverDebit };
+  const r = computeDripData(dripInputs, largeur, longueur);
+
+  useEffect(() => { onChange(dripInputs); }, [sens, modeIrrigation, effMotopompe, qGoutteur, distLigne, distGoutteur, conserverDebit]);
+
+  return (
+    <div className="grid md:grid-cols-2 gap-8">
+      <div>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Sens de la rampe">
+            <Select value={sens} onChange={setSens} options={["Largeur","Longueur"]} />
+          </Field>
+          <Field label="Mode irrigation" unit="secteurs simult." hint="Nombre de secteurs irrigués en parallèle">
+            <NumberInput value={modeIrrigation} onChange={setModeIrrigation} step="1" />
+          </Field>
+          <Field label="Q goutteur (intégré)" unit="l/h" hint="Tuyau à goutteurs intégrés — valeur constructeur"><NumberInput value={qGoutteur} onChange={setQGoutteur} step="0.1" /></Field>
+          <Field label="Efficacité motopompe" unit="0–1"><NumberInput value={effMotopompe} onChange={setEffMotopompe} step="0.05" /></Field>
+          <Field label="Distance entre lignes" unit="m"><NumberInput value={distLigne} onChange={setDistLigne} step="0.1" /></Field>
+          <Field label="Distance entre goutteurs" unit="m"><NumberInput value={distGoutteur} onChange={setDistGoutteur} step="0.05" /></Field>
+          <Field label="Conserver le débit parcelle quel que soit le mode ?" hint="Détermine le débit transmis au Bilan sol-eau">
+            <Select value={conserverDebit} onChange={setConserverDebit} options={["Oui","Non"]} />
+          </Field>
+          <Field label="Parcelle (rappel)" hint="Modifiable sur la page Accueil">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{largeur} × {longueur} m</div>
+          </Field>
+        </div>
+      </div>
+      <div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <ResultCard label="Nombre de rampes" value={r.nbRampe.toFixed(1)} unit="" />
+          <ResultCard label="Goutteurs / rampe" value={r.nbGoutteurParRampe.toFixed(1)} unit="" />
+          <ResultCard label="Q rampe" value={r.qRampe.toFixed(4)} unit="m³/h" />
+          <ResultCard label="Longueur totale rampes" value={r.longueurTotaleRampes.toFixed(1)} unit="m" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <ResultCard label="Q parcelle (brut)" value={r.qParcelleBrut.toFixed(3)} unit="m³/h" />
+          <ResultCard label="Q primaire (÷ mode)" value={r.qPrimaire.toFixed(3)} unit="m³/h" />
+        </div>
+        <div className="grid grid-cols-1 gap-3 mt-3">
+          <ResultCard big label={`Q parcelle retenu — conservation "${conserverDebit}"`} value={r.qParcelleRetenu.toFixed(3)} unit="m³/h" />
+          <ResultCard big label="Q motopompe requis" value={r.qMotopompe ? r.qMotopompe.toFixed(3) : "—"} unit="m³/h" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AspersionForm({ largeur, longueur, ai, onChange }) {
+  const [sens, setSens] = useState(ai.sens ?? "Largeur");
+  const [modeIrrigation, setModeIrrigation] = useState(ai.modeIrrigation ?? 2);
+  const [effMotopompe, setEffMotopompe] = useState(ai.effMotopompe ?? 0.75);
+  const [debitUnitaire, setDebitUnitaire] = useState(ai.debitUnitaire ?? 1.2);
+  const [pressionService, setPressionService] = useState(ai.pressionService ?? 3);
+  const [densite, setDensite] = useState(ai.densite ?? "3 x 2.5");
+  const [xBord, setXBord] = useState(ai.xBord ?? 4);
+  const [margeM, setMargeM] = useState(ai.margeM ?? 1);
+  const [conserverDebit, setConserverDebit] = useState(ai.conserverDebit ?? "Oui");
+
+  const aspersionInputs = { sens, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, margeM, conserverDebit };
+  const r = computeAspersionData(aspersionInputs, largeur, longueur);
+
+  useEffect(() => { onChange(aspersionInputs); }, [sens, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, margeM, conserverDebit]);
+
+  return (
+    <div className="grid md:grid-cols-2 gap-8">
+      <div>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Sens des lignes">
+            <Select value={sens} onChange={setSens} options={["Largeur","Longueur"]} />
+          </Field>
+          <Field label="Mode irrigation" unit="secteurs simult." hint="Nombre de secteurs irrigués en parallèle">
+            <NumberInput value={modeIrrigation} onChange={setModeIrrigation} step="1" />
+          </Field>
+          <Field label="Débit unitaire arroseur" unit="m³/h" hint="Valeur constructeur à la pression de service"><NumberInput value={debitUnitaire} onChange={setDebitUnitaire} step="0.1" /></Field>
+          <Field label="Pression de service" unit="bar" hint="Indicatif — valeur constructeur"><NumberInput value={pressionService} onChange={setPressionService} step="0.5" /></Field>
+          <Field label="Efficacité motopompe" unit="0–1"><NumberInput value={effMotopompe} onChange={setEffMotopompe} step="0.05" /></Field>
+          <Field label="Densité (E_ligne × E_cible)" hint={r.densiteValid ? "Format reconnu" : "Format attendu : 3 x 2.5"}>
+            <input type="text" value={densite} onChange={(e)=>setDensite(e.target.value)} placeholder="ex. 3 x 2.5"
+              className={`w-full rounded-lg border px-3 py-2 font-mono text-[#17324d] focus:outline-none focus:ring-2 focus:ring-[#1d6f5b] ${r.densiteValid ? "border-[#dce5e1]" : "border-red-400"}`} />
+          </Field>
+          <Field label="Distance bord → 1er/dernier élément (x)" unit="m"><NumberInput value={xBord} onChange={setXBord} step="0.5" /></Field>
+          <Field label="Marge de sécurité sur le rayon (M)" unit="m" hint="0,5 à 1m"><NumberInput value={margeM} onChange={setMargeM} step="0.1" /></Field>
+          <Field label="Conserver le débit parcelle quel que soit le mode ?" hint="Détermine le débit transmis au Bilan sol-eau">
+            <Select value={conserverDebit} onChange={setConserverDebit} options={["Oui","Non"]} />
+          </Field>
+          <Field label="Parcelle (rappel)" hint="Modifiable sur la page Accueil">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{largeur} × {longueur} m</div>
+          </Field>
+        </div>
+      </div>
+      <div>
+        <div className="rounded-xl border border-[#c9dcd3] bg-[#eaf3ef] p-4 mb-4">
+          <div className="text-xs font-semibold text-[#2a4a3d] uppercase tracking-wide mb-2">Rayon de jet requis (résultat, pas une donnée d'entrée)</div>
+          <div className="grid grid-cols-2 gap-3">
+            <ResultCard big label="Rayon de jet minimum requis" value={r.rayonJetRequis.toFixed(2)} unit="m" />
+            <ResultCard big label="Diamètre d'arrosage requis" value={r.diamAsperseurRequis.toFixed(2)} unit="m" />
+          </div>
+          <p className="text-[11px] text-[#2a4a3d] mt-2">Choisis un modèle d'asperseur dont la portée réelle est ≥ à cette valeur.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <ResultCard label="P (axe rampe)" value={r.P_r} unit="" />
+          <ResultCard label="Arroseurs / ligne (A)" value={r.nbArroseurParLigne} unit="" />
+          <ResultCard label="E_réel (axe rampe)" value={r.Ereel_r.toFixed(2)} unit="m" />
+          <ResultCard label="P (axe lignes)" value={r.P_l} unit="" />
+          <ResultCard label="Nombre de lignes (A)" value={r.nbLignes} unit="" />
+          <ResultCard label="E_réel (axe lignes)" value={r.Ereel_l.toFixed(2)} unit="m" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <ResultCard label="Nombre total d'arroseurs" value={r.nbArroseursTotal} unit="" />
+          <ResultCard label="Longueur d'une rampe (tuyau)" value={r.longueurUneRampe.toFixed(1)} unit="m" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <ResultCard label="Pluviométrie" value={r.pluviometrie.toFixed(1)} unit="mm/h" />
+          <ResultCard label="Q ligne" value={r.qRampe.toFixed(3)} unit="m³/h" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <ResultCard label="Q parcelle (brut)" value={r.qParcelleBrut.toFixed(3)} unit="m³/h" />
+          <ResultCard label="Q primaire (÷ mode)" value={r.qPrimaire.toFixed(3)} unit="m³/h" />
+        </div>
+        <div className="grid grid-cols-1 gap-3 mt-3">
+          <ResultCard big label={`Q parcelle retenu — conservation "${conserverDebit}"`} value={r.qParcelleRetenu.toFixed(3)} unit="m³/h" />
+          <ResultCard big label="Q motopompe requis" value={r.qMotopompe ? r.qMotopompe.toFixed(3) : "—"} unit="m³/h" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConceptionContent() {
+  const initLive = loadLive();
+  const largeur = initLive.largeur || 100;
+  const longueur = initLive.longueur || 100;
+  const [irrigationType, setIrrigationType] = useState(initLive.irrigationType || "goutte");
+
+  const setType = (t) => { setIrrigationType(t); saveLive({ irrigationType: t }); };
+
+  return (
+    <div className="min-h-screen bg-[#f5f8f6]">
+      <PageHeader title="Conception réseau" />
+      <PageNav current="conception.html" />
+      <main className="max-w-5xl mx-auto px-6 py-8">
+
+        <div className="mb-6 inline-flex rounded-lg border border-[#dce5e1] overflow-hidden">
+          <button onClick={() => setType("goutte")}
+            className={`px-4 py-2 text-sm font-semibold transition-colors ${irrigationType !== "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
+            💧 Goutte-à-goutte
+          </button>
+          <button onClick={() => setType("aspersion")}
+            className={`px-4 py-2 text-sm font-semibold transition-colors ${irrigationType === "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
+            🌧 Aspersion
+          </button>
+        </div>
+
+        {irrigationType !== "aspersion" ? (
+          <DripForm largeur={largeur} longueur={longueur} di={initLive.dripInputs || {}}
+            onChange={(dripInputs) => saveLive({ dripInputs })} />
+        ) : (
+          <AspersionForm largeur={largeur} longueur={longueur} ai={initLive.aspersionInputs || {}}
+            onChange={(aspersionInputs) => saveLive({ aspersionInputs })} />
+        )}
+
+      </main>
+      <PageFooter />
+    </div>
+  );
+}
+
+function Root() {
+  return <IdentityGate><ConceptionContent /></IdentityGate>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>

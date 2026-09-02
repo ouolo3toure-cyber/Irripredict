@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bilan sol-eau-culture | Calculateur hydro-agricole</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2317324d'/%3E%3Cpath d='M50 20 C35 45 25 55 25 68 A25 25 0 0 0 75 68 C75 55 65 45 50 20Z' fill='%231d6f5b'/%3E%3C/svg%3E">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+<style>
+  body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.js"></script>
+<script type="text/babel">
+
+function BilanContent() {
+  const initLive = loadLive();
+  const largeur = initLive.largeur || 100;
+  const longueur = initLive.longueur || 100;
+  const bi = initLive.bilanInputs || {};
+
+  const [soilType, setSoilType] = useState(bi.soilType ?? "Limon sableux + matière organique");
+  const [densite, setDensite] = useState(bi.densite ?? 1.4);
+  const [efficacite, setEfficacite] = useState(bi.efficacite ?? 0.8);
+  const [profRacinaire, setProfRacinaire] = useState(bi.profRacinaire ?? 0.3);
+  const [coefSol, setCoefSol] = useState(bi.coefSol ?? 0.99);
+  const [mad, setMad] = useState(bi.mad ?? 0.6);
+  const [stade, setStade] = useState(bi.stade ?? "Reproduction");
+  const [kcVeg, setKcVeg] = useState(bi.kcVeg ?? 0.9);
+  const [kcRepro, setKcRepro] = useState(bi.kcRepro ?? 1.15);
+  const [kcMatu, setKcMatu] = useState(bi.kcMatu ?? 0.5);
+  const [freq, setFreq] = useState(bi.freq ?? 1);
+  const [etoMonthly, setEtoMonthly] = useState(bi.etoMonthly && bi.etoMonthly.length === 12 ? bi.etoMonthly : Array(12).fill(""));
+
+  const bilanInputs = { soilType, densite, efficacite, profRacinaire, coefSol, mad, stade, kcVeg, kcRepro, kcMatu, freq, etoMonthly };
+  const { fc, wp, kc, table, superficie, volumeEauSol, volumeEfficace } = computeBilanTable(bilanInputs, largeur, longueur);
+
+  const designData = getDesignData(initLive);
+  const qParcelle = designData ? designData.qParcelleRetenu : null;
+
+  useEffect(() => { saveLive({ bilanInputs }); }, [soilType, densite, efficacite, profRacinaire, coefSol, mad, stade, kcVeg, kcRepro, kcMatu, freq, etoMonthly]);
+
+  const updateEto = (i, val) => {
+    const next = [...etoMonthly];
+    next[i] = val === "" ? "" : val;
+    setEtoMonthly(next);
+  };
+
+  const tableWithDuree = table.map(r => ({ ...r, dureeH: qParcelle ? r.doseBrute / qParcelle : null }));
+
+  return (
+    <div className="min-h-screen bg-[#f5f8f6]">
+      <PageHeader title="Bilan sol-eau-culture" />
+      <PageNav current="bilan-sol-eau.html" />
+      <main className="max-w-5xl mx-auto px-6 py-8">
+
+        <div className="grid md:grid-cols-3 gap-4 mb-6">
+          <Field label="Type de sol">
+            <Select value={soilType} onChange={setSoilType} options={Object.keys(SOIL_DB)} />
+          </Field>
+          <Field label="Capacité au champ" hint="Auto (base de sols)">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{fc.toFixed(2)}</div>
+          </Field>
+          <Field label="Point de flétrissement" hint="Auto (base de sols)">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{wp.toFixed(2)}</div>
+          </Field>
+
+          <Field label="Largeur × Longueur parcelle" hint="Modifiable sur la page Accueil">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{largeur} × {longueur} m</div>
+          </Field>
+          <Field label="Superficie" unit="m²" hint="Auto">
+            <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{superficie.toFixed(2)}</div>
+          </Field>
+          <Field label="Densité apparente du sol"><NumberInput value={densite} onChange={setDensite} step="0.05" /></Field>
+
+          <Field label="Profondeur racinaire" unit="m"><NumberInput value={profRacinaire} onChange={setProfRacinaire} step="0.05" /></Field>
+          <Field label="Efficacité du système" unit="0–1" hint="Goutte-à-goutte ≈0.8-0.9"><NumberInput value={efficacite} onChange={setEfficacite} step="0.05" /></Field>
+          <Field label="Coefficient d'efficacité du sol" unit="0–1" hint="Défaut 0.99"><NumberInput value={coefSol} onChange={setCoefSol} step="0.01" /></Field>
+
+          <Field label="Coefficient de disponibilité (MAD)" unit="0–1" hint="Défaut 0.6"><NumberInput value={mad} onChange={setMad} step="0.05" /></Field>
+          <Field label="Fréquence d'irrigation voulue" unit="jours"><NumberInput value={freq} onChange={setFreq} step="1" /></Field>
+        </div>
+
+        <div className="grid md:grid-cols-4 gap-4 mb-6 items-end">
+          <Field label="Stade de développement">
+            <Select value={stade} onChange={setStade} options={["Végétatif","Reproduction","Maturation"]} />
+          </Field>
+          <Field label="Kc — Végétatif"><NumberInput value={kcVeg} onChange={setKcVeg} step="0.05" /></Field>
+          <Field label="Kc — Reproduction"><NumberInput value={kcRepro} onChange={setKcRepro} step="0.05" /></Field>
+          <Field label="Kc — Maturation"><NumberInput value={kcMatu} onChange={setKcMatu} step="0.05" /></Field>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-3 mb-6">
+          <ResultCard label="Kc appliqué (stade actuel)" value={kc.toFixed(2)} unit="" />
+          <ResultCard label="Volume eau du sol" value={volumeEauSol.toFixed(3)} unit="m³" />
+          <ResultCard label="Volume eau sol efficace" value={volumeEfficace.toFixed(3)} unit="m³" />
+        </div>
+
+        <Field label="Débit parcelle" unit="m³/h" hint={qParcelle ? "Alimenté automatiquement par la page Conception réseau" : "Renseigne la page Conception réseau pour activer le calcul de durée"}>
+          <div className="max-w-xs w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{qParcelle ? qParcelle.toFixed(3) : "—"}</div>
+        </Field>
+
+        <p className="text-xs text-[#60707d] mt-4 mb-1">
+          Renseigne l'<b>ETo (évapotranspiration de référence, en mm/jour)</b> pour chaque mois — valeur disponible via une station météo locale, CROPWAT, ou une base climatique régionale (FAO/CLIMWAT).
+        </p>
+        <div className="overflow-x-auto rounded-xl border border-[#dce5e1] mt-2">
+          <table className="w-full text-sm">
+            <thead className="bg-[#17324d] text-white">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium sticky left-0 bg-[#17324d]">Mois</th>
+                <th className="text-left px-3 py-2 font-medium">ETo (mm/j)</th>
+                <th className="text-left px-3 py-2 font-medium">ETo (mm/mois)</th>
+                <th className="text-left px-3 py-2 font-medium">ETc (mm/j)</th>
+                <th className="text-left px-3 py-2 font-medium">ETC (m³/j)</th>
+                <th className="text-left px-3 py-2 font-medium">Dose nette (m³/j)</th>
+                <th className="text-left px-3 py-2 font-medium">Dose brute (m³/j)</th>
+                <th className="text-left px-3 py-2 font-medium">Durée d'irrigation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tableWithDuree.map((r, i) => (
+                <tr key={r.month} className={i % 2 ? "bg-[#f5f8f6]" : "bg-white"}>
+                  <td className="px-3 py-1.5 font-medium text-[#17324d] sticky left-0" style={{background: i%2 ? "#f5f8f6" : "#fff"}}>{r.month}</td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" value={etoMonthly[i]} onChange={(e)=>updateEto(i, e.target.value)} placeholder="mm/j"
+                      className="w-16 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" />
+                  </td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{r.etoMois.toFixed(1)}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{r.etcJ.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{r.etcM3j.toFixed(4)}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{r.doseNette.toFixed(4)}</td>
+                  <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{r.doseBrute.toFixed(4)}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{r.dureeH!=null ? fmtDuree(r.dureeH) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+      </main>
+      <PageFooter />
+    </div>
+  );
+}
+
+function Root() {
+  return <IdentityGate><BilanContent /></IdentityGate>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>

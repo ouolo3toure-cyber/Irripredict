@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dimensionnement réseau | Calculateur hydro-agricole</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2317324d'/%3E%3Cpath d='M50 20 C35 45 25 55 25 68 A25 25 0 0 0 75 68 C75 55 65 45 50 20Z' fill='%231d6f5b'/%3E%3C/svg%3E">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+<style>
+  body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.js"></script>
+<script type="text/babel">
+
+function NetworkContent() {
+  const initLive = loadLive();
+  const designData = getDesignData(initLive);
+  const qPrimaire = designData ? designData.qPrimaire : null;
+  const qRampe = designData ? designData.qRampe : null;
+  const ni = initLive.networkInputs || {};
+
+  const [pipeType, setPipeType] = useState(ni.pipeType ?? "Primaire");
+  const [methode, setMethode] = useState(ni.methode ?? "Continuité");
+  const [vitesse, setVitesse] = useState(ni.vitesse ?? 1.2);
+  const [diamManuel, setDiamManuel] = useState(ni.diamManuel ?? 100);
+  const [materiau, setMateriau] = useState(ni.materiau ?? "PVC / PEHD (lisse)");
+  const [frictionAuto, setFrictionAuto] = useState(ni.frictionAuto ?? true);
+  const [frictionManuel, setFrictionManuel] = useState(ni.frictionManuel ?? 0.013);
+  const [sections, setSections] = useState(ni.sections ?? [{ nom: "Section 1", longueur: 100 }]);
+  const rugosite = ROUGHNESS_OPTIONS[materiau];
+
+  const debitLs = (pipeType === "Primaire" ? qPrimaire : qRampe) != null
+    ? (pipeType === "Primaire" ? qPrimaire : qRampe) * 1000 / 3600 : 0;
+
+  useEffect(() => {
+    saveLive({ networkInputs: { pipeType, methode, vitesse, diamManuel, materiau, frictionAuto, frictionManuel, sections } });
+  }, [pipeType, methode, vitesse, diamManuel, materiau, frictionAuto, frictionManuel, sections]);
+
+  const calc = useMemo(() => {
+    const q = debitLs / 1000;
+    let diamCalc = null, diamStd;
+    if (methode === "Continuité") {
+      const a = q / vitesse;
+      diamCalc = Math.sqrt((4 * a) / Math.PI) * 1000;
+      diamStd = STD_DIAMETERS.find(d => d >= diamCalc) || STD_DIAMETERS[STD_DIAMETERS.length - 1];
+    } else {
+      diamStd = diamManuel;
+    }
+    const dM = diamStd / 1000;
+    const a = Math.PI * dM * dM / 4;
+    const v = q / a;
+    const re = (MASSE_VOL_EAU * v * dM) / VISCOSITE_EAU;
+    const relRough = (rugosite / 1000) / dM;
+    const fAuto = frictionFactor(re, relRough);
+    const f = frictionAuto ? fAuto : frictionManuel;
+    const g = 9.81;
+    const sectionsCalc = sections.map(s => ({
+      ...s,
+      perte: (s.longueur === "" || s.longueur == null) ? null : (f * s.longueur * v * v) / (dM * 2 * g),
+    }));
+    const totalPerte = sectionsCalc.reduce((sum, s) => sum + (s.perte || 0), 0);
+    return { diamCalc, diamStd, section: a, v, re, relRough, fAuto, f, sectionsCalc, totalPerte, regime: re < 2300 ? "Laminaire" : "Turbulent" };
+  }, [debitLs, methode, vitesse, diamManuel, rugosite, frictionAuto, frictionManuel, sections]);
+
+  const updateSection = (i, key, val) => {
+    const next = [...sections];
+    next[i] = { ...next[i], [key]: key === "longueur" ? (val === "" ? "" : parseFloat(val)) : val };
+    setSections(next);
+  };
+  const addSection = () => setSections([...sections, { nom: `Section ${sections.length + 1}`, longueur: 50 }]);
+  const removeSection = (i) => setSections(sections.filter((_, idx) => idx !== i));
+
+  const maxD = 315, scale = 130 / maxD;
+
+  return (
+    <div className="min-h-screen bg-[#f5f8f6]">
+      <PageHeader title="Dimensionnement réseau" />
+      <PageNav current="reseau.html" />
+      <main className="max-w-5xl mx-auto px-6 py-8">
+
+        <div className="grid md:grid-cols-2 gap-8">
+          <div>
+            <div className="grid grid-cols-2 gap-4 mb-2">
+              <Field label="Canalisation">
+                <Select value={pipeType} onChange={setPipeType} options={["Primaire","Rampe"]} />
+              </Field>
+              <Field label="Débit" unit="l/s" hint="Calculé automatiquement — non modifiable">
+                <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{debitLs.toFixed(4)}</div>
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Méthode de diamètre">
+                <Select value={methode} onChange={setMethode} options={["Continuité","Diamètre imposé"]} />
+              </Field>
+              {methode === "Continuité" ? (
+                <Field label="Vitesse visée" unit="m/s" hint="Usuel : 0,5 – 1,5 m/s">
+                  <input type="range" min="0.3" max="2.5" step="0.05" value={vitesse} onChange={(e)=>setVitesse(parseFloat(e.target.value))} className="w-full accent-[#1d6f5b]" />
+                  <div className="text-right font-mono text-sm text-[#1d6f5b] font-semibold">{vitesse.toFixed(2)} m/s</div>
+                </Field>
+              ) : (
+                <Field label="Diamètre imposé" unit="mm"><NumberInput value={diamManuel} onChange={setDiamManuel} step="1" /></Field>
+              )}
+              <Field label="Matériau (rugosité)" hint={`k = ${rugosite} mm`}>
+                <Select value={materiau} onChange={setMateriau} options={Object.keys(ROUGHNESS_OPTIONS)} />
+              </Field>
+              <Field label="Masse volumique de l'eau" unit="kg/m³" hint="Fixe">
+                <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{MASSE_VOL_EAU}</div>
+              </Field>
+              <Field label="Viscosité dynamique de l'eau" unit="Pa·s" hint="Fixe — eau à ≈20°C">
+                <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{VISCOSITE_EAU}</div>
+              </Field>
+              <Field label="Coefficient de frottement" hint={frictionAuto ? "Calcul automatique" : "Saisie manuelle (abaque de Moody)"}>
+                {frictionAuto ? (
+                  <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{calc.fAuto ? calc.fAuto.toFixed(4) : "—"}</div>
+                ) : (
+                  <NumberInput value={frictionManuel} onChange={setFrictionManuel} step="0.001" />
+                )}
+              </Field>
+            </div>
+            <label className="flex items-center gap-2 mt-2 text-xs text-[#60707d]">
+              <input type="checkbox" checked={frictionAuto} onChange={(e)=>setFrictionAuto(e.target.checked)} className="accent-[#1d6f5b]" />
+              Calcul automatique du coefficient de frottement (décoche pour saisir une valeur lue sur abaque de Moody)
+            </label>
+          </div>
+
+          <div>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {methode === "Continuité" && <ResultCard label="Diamètre théorique" value={calc.diamCalc.toFixed(0)} unit="mm" />}
+              <ResultCard label="Diamètre retenu" value={calc.diamStd} unit="mm" />
+              <ResultCard label="Vitesse réelle" value={calc.v.toFixed(2)} unit="m/s" />
+              <ResultCard label="Nombre de Reynolds" value={calc.re.toFixed(0)} unit="" />
+              <ResultCard label="Régime d'écoulement" value={calc.regime} unit="" />
+            </div>
+            <div className="rounded-xl border border-[#dce5e1] bg-[#0f2537] p-6 flex items-center justify-center mb-4">
+              <svg width="160" height="160" viewBox="0 0 180 180">
+                <circle cx="90" cy="90" r="80" fill="none" stroke="#2a4a5c" strokeWidth="1" strokeDasharray="3 4" />
+                <circle cx="90" cy="90" r={Math.max(6, calc.diamStd*scale/2)} fill="#1d6f5b" opacity="0.35" stroke="#4fd8b8" strokeWidth="2" />
+                <text x="90" y="94" textAnchor="middle" fill="#eaf3ef" fontSize="13" fontFamily="monospace">Ø{calc.diamStd}mm</text>
+              </svg>
+            </div>
+            <ResultCard big label="Pertes de charge totales" value={calc.totalPerte.toFixed(3)} unit="m" />
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div className="text-sm font-semibold text-[#17324d] mb-2">Sections de canalisation</div>
+          <div className="overflow-x-auto rounded-xl border border-[#dce5e1]">
+            <table className="w-full text-sm">
+              <thead className="bg-[#17324d] text-white">
+                <tr><th className="text-left px-3 py-2 font-medium">Section</th><th className="text-left px-3 py-2 font-medium">Longueur (m)</th><th className="text-left px-3 py-2 font-medium">Pertes de charge (m)</th><th></th></tr>
+              </thead>
+              <tbody>
+                {calc.sectionsCalc.map((s, i) => (
+                  <tr key={i} className={i % 2 ? "bg-[#f5f8f6]" : "bg-white"}>
+                    <td className="px-3 py-1.5 font-medium text-[#17324d]">{s.nom}</td>
+                    <td className="px-2 py-1.5">
+                      <input type="number" value={sections[i].longueur} onChange={(e)=>updateSection(i,"longueur",e.target.value)}
+                        className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" />
+                    </td>
+                    <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{s.perte != null ? s.perte.toFixed(4) : "—"}</td>
+                    <td className="px-3 py-1.5">
+                      <button onClick={()=>removeSection(i)} className="text-xs text-red-500 hover:underline">Retirer</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button onClick={addSection} className="text-xs text-[#1d6f5b] font-semibold mt-2 underline">+ Ajouter une section</button>
+        </div>
+
+      </main>
+      <PageFooter />
+    </div>
+  );
+}
+
+function Root() {
+  return <IdentityGate><NetworkContent /></IdentityGate>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>

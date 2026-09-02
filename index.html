@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Calculateur hydro-agricole — bilan sol-eau-culture, dimensionnement goutte-à-goutte/aspersion, réseau hydraulique et estimation de coût. Outil de pré-dimensionnement pour l'irrigation.">
+<title>Calculateur hydro-agricole | TOURÉ CÉSAR</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2317324d'/%3E%3Cpath d='M50 20 C35 45 25 55 25 68 A25 25 0 0 0 75 68 C75 55 65 45 50 20Z' fill='%231d6f5b'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Calculateur hydro-agricole | TOURÉ CÉSAR">
+<meta property="og:locale" content="fr_FR">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+<style>
+  body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.js"></script>
+<script type="text/babel">
+
+function HomeContent() {
+  const [live, setLive] = useState(() => ({ largeur: 100, longueur: 100, cropName: "", irrigationType: "goutte", ...loadLive() }));
+  const [projects, setProjects] = useState(() => loadProjects());
+  const [projectNameInput, setProjectNameInput] = useState("");
+
+  const update = (partial) => {
+    const next = saveLive(partial);
+    setLive(next);
+  };
+
+  const handleSaveProject = () => {
+    const name = projectNameInput.trim() || live.cropName?.trim() || `Projet ${new Date().toLocaleDateString("fr-FR")}`;
+    const next = { ...projects, [name]: { ...live, savedAt: new Date().toISOString() } };
+    setProjects(next);
+    saveProjects(next);
+    setProjectNameInput("");
+    alert(`Projet "${name}" sauvegardé sur cet appareil/navigateur.`);
+  };
+
+  const handleLoadProject = (name) => {
+    const p = projects[name];
+    if (!p) return;
+    const next = saveLive(p);
+    setLive(next);
+    alert(`Projet "${name}" chargé — ouvre les autres pages pour voir le détail.`);
+  };
+
+  const handleDeleteProject = (name) => {
+    const next = { ...projects };
+    delete next[name];
+    setProjects(next);
+    saveProjects(next);
+  };
+
+  const handleNewProject = () => {
+    const next = saveLive({ largeur: 100, longueur: 100, cropName: "", irrigationType: "goutte",
+      bilanInputs: null, dripInputs: null, aspersionInputs: null, networkInputs: null, costInputs: null });
+    setLive(next);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#f5f8f6]">
+      <PageHeader />
+      <PageNav current="index.html" />
+      <main className="max-w-5xl mx-auto px-6 py-8">
+
+        <div className="grid md:grid-cols-3 gap-4 mb-6">
+          <Field label="Nom de la culture / du projet">
+            <input type="text" value={live.cropName || ""} onChange={(e) => update({ cropName: e.target.value })}
+              placeholder="ex. Riz irrigué, Tomate..."
+              className="w-full rounded-lg border border-[#dce5e1] bg-white px-3 py-2 text-[#17324d] focus:outline-none focus:ring-2 focus:ring-[#1d6f5b] focus:border-[#1d6f5b]" />
+          </Field>
+          <Field label="Largeur parcelle" unit="m">
+            <NumberInput value={live.largeur} onChange={(v) => update({ largeur: v })} step="0.1" />
+          </Field>
+          <Field label="Longueur parcelle" unit="m">
+            <NumberInput value={live.longueur} onChange={(v) => update({ longueur: v })} step="0.1" />
+          </Field>
+        </div>
+
+        <div className="mb-6">
+          <div className="text-sm font-medium text-[#17324d] mb-2">Type d'irrigation</div>
+          <div className="inline-flex rounded-lg border border-[#dce5e1] overflow-hidden">
+            <button onClick={() => update({ irrigationType: "goutte" })}
+              className={`px-4 py-2 text-sm font-semibold transition-colors ${live.irrigationType !== "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
+              💧 Goutte-à-goutte
+            </button>
+            <button onClick={() => update({ irrigationType: "aspersion" })}
+              className={`px-4 py-2 text-sm font-semibold transition-colors ${live.irrigationType === "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
+              🌧 Aspersion
+            </button>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4 mb-10">
+          {NAV_LINKS.filter(l => l.href !== "index.html").map(l => (
+            <a key={l.href} href={l.href} className="block rounded-xl border border-[#dce5e1] bg-white p-5 hover:border-[#1d6f5b] hover:shadow-md transition-all">
+              <div className="font-semibold text-[#17324d]">{l.label} →</div>
+            </a>
+          ))}
+        </div>
+
+        <div className="rounded-xl border border-[#dce5e1] bg-white p-5">
+          <div className="text-sm font-semibold text-[#17324d] mb-3">Projets sauvegardés</div>
+          <div className="flex gap-2 mb-4">
+            <input type="text" value={projectNameInput} onChange={(e) => setProjectNameInput(e.target.value)}
+              placeholder={live.cropName || "Nom du projet"}
+              className="flex-1 rounded-lg border border-[#dce5e1] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1d6f5b]" />
+            <button onClick={handleSaveProject} className="bg-[#1d6f5b] text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#175a4a]">Sauver le projet actuel</button>
+          </div>
+          <div className="space-y-1.5 mb-3">
+            {Object.keys(projects).length === 0 && <p className="text-xs text-[#60707d]">Aucun projet sauvegardé pour l'instant.</p>}
+            {Object.entries(projects).map(([name, p]) => (
+              <div key={name} className="flex items-center justify-between gap-2 bg-[#f5f8f6] rounded-lg px-3 py-2">
+                <button onClick={() => handleLoadProject(name)} className="text-sm text-left flex-1 hover:text-[#1d6f5b] font-medium truncate">{name}</button>
+                <button onClick={() => handleDeleteProject(name)} className="text-xs text-red-500 hover:underline shrink-0">Suppr.</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={handleNewProject} className="text-xs text-[#60707d] hover:text-[#17324d] underline">+ Nouveau projet vierge</button>
+        </div>
+
+      </main>
+      <PageFooter />
+    </div>
+  );
+}
+
+function Root() {
+  return <IdentityGate><HomeContent /></IdentityGate>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>

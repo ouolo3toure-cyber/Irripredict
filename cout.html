@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coût & Rapport | Calculateur hydro-agricole</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2317324d'/%3E%3Cpath d='M50 20 C35 45 25 55 25 68 A25 25 0 0 0 75 68 C75 55 65 45 50 20Z' fill='%231d6f5b'/%3E%3C/svg%3E">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+<style>
+  body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media print { nav, header, footer, .print\:hidden { display: none !important; } body{background:#fff!important} #root,main{padding:0!important;margin:0!important;max-width:100%!important} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.js"></script>
+<script type="text/babel">
+
+function CostContent() {
+  const initLive = loadLive();
+  const largeur = initLive.largeur || 100;
+  const longueur = initLive.longueur || 100;
+  const cropName = initLive.cropName || "";
+  const irrigationType = initLive.irrigationType || "goutte";
+  const estGoutte = irrigationType !== "aspersion";
+  const dripData = getDesignData(initLive);
+  const { table: bilanTable, superficie } = computeBilanTable(initLive.bilanInputs, largeur, longueur);
+  const monthlyData = { table: bilanTable, superficie };
+
+  const ci = initLive.costInputs || {};
+
+  const longueurPrimaire = 100, longueurPorteRampe = largeur, vitessePrimaire = 1.2, vitesseRampeAspersion = 1.2;
+  const qPrimaire = dripData ? dripData.qPrimaire : null;
+  const qRampe = dripData ? dripData.qRampe : null;
+  const longueurRampe = dripData ? dripData.longueurTotaleRampes : 0;
+  const diamRampe = estGoutte ? 16 : null;
+
+  const calc = useMemo(() => {
+    if (!qPrimaire) return null;
+    const qM3s = qPrimaire / 3600;
+    const diamPrimaireCalc = Math.sqrt((4 * (qM3s / vitessePrimaire)) / Math.PI) * 1000;
+    const diamPrimaire = STD_DIAMETERS.find(d => d >= diamPrimaireCalc) || STD_DIAMETERS[STD_DIAMETERS.length - 1];
+    const diamPorteRampe = diamPrimaire;
+    let diamRampeCalc = null;
+    if (!estGoutte && qRampe) {
+      const qRampeM3s = qRampe / 3600;
+      const dCalc = Math.sqrt((4 * (qRampeM3s / vitesseRampeAspersion)) / Math.PI) * 1000;
+      diamRampeCalc = STD_DIAMETERS.find(d => d >= dCalc) || STD_DIAMETERS[STD_DIAMETERS.length - 1];
+    }
+    return { diamPrimaire, diamPorteRampe, diamRampeCalc };
+  }, [qPrimaire, qRampe, estGoutte]);
+
+  const diamRampeFinal = estGoutte ? diamRampe : (calc ? calc.diamRampeCalc : null);
+
+  const rampeCheck = useMemo(() => {
+    if (!estGoutte || !qRampe) return null;
+    const qM3s = qRampe / 3600;
+    const A = Math.PI * Math.pow(diamRampe / 1000, 2) / 4;
+    const vReelle = qM3s / A;
+    const vCible = 1.0;
+    const diamTheorique = Math.sqrt((4 * (qM3s / vCible)) / Math.PI) * 1000;
+    return { vReelle, diamTheorique, suffisant: diamTheorique <= diamRampe };
+  }, [qRampe, estGoutte]);
+
+  // --- Vérification hydraulique ---
+  const MCE_PAR_BAR = 10.19;
+  const [methodePerte, setMethodePerte] = useState(ci.methodePerte ?? "darcy");
+  const [materiauCout, setMateriauCout] = useState(ci.materiauCout ?? "PVC / PEHD (lisse)");
+  const rugositeCout = ROUGHNESS_OPTIONS[materiauCout];
+  const [pressionPompe, setPressionPompe] = useState(ci.pressionPompe ?? 2);
+  const [pressionRequiseGoutteur, setPressionRequiseGoutteur] = useState(ci.pressionRequiseGoutteur ?? 1);
+  const [denivele, setDenivele] = useState(ci.denivele ?? 0);
+  const [jPrimaire, setJPrimaire] = useState(ci.jPrimaire ?? 0.5);
+  const [jPorteRampe, setJPorteRampe] = useState(ci.jPorteRampe ?? 1);
+  const [jRampe, setJRampe] = useState(ci.jRampe ?? 2.5);
+  const [denivelePrimaireSeg, setDenivelePrimaireSeg] = useState(ci.denivelePrimaireSeg ?? 0);
+  const [denivelePorteRampeSeg, setDenivelePorteRampeSeg] = useState(ci.denivelePorteRampeSeg ?? 0);
+  const [deniveleRampeSeg, setDeniveleRampeSeg] = useState(ci.deniveleRampeSeg ?? 1);
+
+  function computeLoss(qM3h, diamMm, longueurM) {
+    if (!qM3h || !diamMm || !longueurM) return null;
+    const qM3s = qM3h / 3600;
+    const dM = diamMm / 1000;
+    const A = Math.PI * dM * dM / 4;
+    const v = qM3s / A;
+    const re = (MASSE_VOL_EAU * v * dM) / VISCOSITE_EAU;
+    const relRough = (rugositeCout / 1000) / dM;
+    const f = frictionFactor(re, relRough);
+    const perte = f * longueurM * v * v / (dM * 2 * 9.81);
+    return { v, re, f, perte };
+  }
+
+  const hydraulique = useMemo(() => {
+    if (!calc || !qPrimaire || !qRampe || !dripData) return null;
+    if (methodePerte === "darcy") {
+      const lPrimaire = computeLoss(qPrimaire, calc.diamPrimaire, longueurPrimaire);
+      const lPorteRampe = computeLoss(qPrimaire, calc.diamPorteRampe, longueurPorteRampe);
+      const lRampe = computeLoss(qRampe, diamRampeFinal, dripData.longueurUneRampe);
+      if (!lPrimaire || !lPorteRampe || !lRampe) return null;
+      const perteTotaleM = lPrimaire.perte + lPorteRampe.perte + lRampe.perte;
+      const pressionDisponible = pressionPompe - (perteTotaleM / MCE_PAR_BAR) - (denivele / MCE_PAR_BAR);
+      return { methode: "darcy", lPrimaire, lPorteRampe, lRampe, perteTotaleM, pressionDisponible, suffisant: pressionDisponible >= pressionRequiseGoutteur };
+    } else {
+      const pPrimaire = (jPrimaire / 100) * longueurPrimaire;
+      const pPorteRampe = (jPorteRampe / 100) * longueurPorteRampe;
+      const pRampe = (jRampe / 100) * dripData.longueurUneRampe;
+      const perteFrottement = pPrimaire + pPorteRampe + pRampe;
+      const perteDenivele = denivelePrimaireSeg + denivelePorteRampeSeg + deniveleRampeSeg;
+      const perteTotaleM = perteFrottement + perteDenivele;
+      const pressionDisponible = pressionPompe - (perteTotaleM / MCE_PAR_BAR);
+      return {
+        methode: "manuel",
+        segments: [
+          { nom: "Primaire", j: jPrimaire, longueur: longueurPrimaire, denivele: denivelePrimaireSeg, perte: pPrimaire + denivelePrimaireSeg },
+          { nom: "Porte-rampe", j: jPorteRampe, longueur: longueurPorteRampe, denivele: denivelePorteRampeSeg, perte: pPorteRampe + denivelePorteRampeSeg },
+          { nom: "Rampe", j: jRampe, longueur: dripData.longueurUneRampe, denivele: deniveleRampeSeg, perte: pRampe + deniveleRampeSeg },
+        ],
+        perteTotaleM, pressionDisponible, suffisant: pressionDisponible >= pressionRequiseGoutteur,
+      };
+    }
+  }, [calc, qPrimaire, qRampe, dripData, longueurPrimaire, longueurPorteRampe, pressionPompe, denivele, pressionRequiseGoutteur,
+      methodePerte, materiauCout, jPrimaire, jPorteRampe, jRampe, denivelePrimaireSeg, denivelePorteRampeSeg, deniveleRampeSeg, diamRampeFinal]);
+
+  // --- Prix ---
+  const [prixPrimaire, setPrixPrimaire] = useState(ci.prixPrimaire ?? null);
+  const [prixPorteRampe, setPrixPorteRampe] = useState(ci.prixPorteRampe ?? null);
+  const [prixRampe, setPrixRampe] = useState(ci.prixRampe ?? 130);
+
+  useEffect(() => {
+    if (calc) {
+      if (prixPrimaire === null) setPrixPrimaire(priceEstimate(calc.diamPrimaire));
+      if (prixPorteRampe === null) setPrixPorteRampe(priceEstimate(calc.diamPorteRampe));
+      if (!estGoutte && calc.diamRampeCalc && ci.prixRampe == null) setPrixRampe(priceEstimate(calc.diamRampeCalc));
+    }
+  }, [calc]);
+
+  const costPrimaire = calc ? longueurPrimaire * (prixPrimaire || 0) : 0;
+  const costPorteRampe = calc ? longueurPorteRampe * (prixPorteRampe || 0) : 0;
+  const costRampe = longueurRampe * prixRampe;
+
+  // --- Canne d'aspersion + asperseur ---
+  const [longueurCanne, setLongueurCanne] = useState(ci.longueurCanne ?? 0.6);
+  const [prixCanne, setPrixCanne] = useState(ci.prixCanne ?? null);
+  const [prixAsperseur, setPrixAsperseur] = useState(ci.prixAsperseur ?? 5000);
+
+  const nbArroseurs = (!estGoutte && dripData) ? Math.ceil(dripData.nbArroseursTotal) : 0;
+  const debitUnitaireAsperseur = (!estGoutte && dripData) ? dripData.debitUnitaire : null;
+
+  const diamCanne = useMemo(() => {
+    if (estGoutte || !debitUnitaireAsperseur) return null;
+    const qM3s = debitUnitaireAsperseur / 3600;
+    const vCible = 1.5;
+    const dCalc = Math.sqrt((4 * (qM3s / vCible)) / Math.PI) * 1000;
+    return STD_DIAMETERS.find(d => d >= dCalc) || STD_DIAMETERS[0];
+  }, [estGoutte, debitUnitaireAsperseur]);
+
+  useEffect(() => {
+    if (diamCanne && prixCanne === null) setPrixCanne(priceEstimate(diamCanne));
+  }, [diamCanne]);
+
+  const longueurCanneTotale = longueurCanne * nbArroseurs;
+  const costCanne = !estGoutte ? longueurCanneTotale * (prixCanne || 0) : 0;
+  const costAsperseur = !estGoutte ? nbArroseurs * prixAsperseur : 0;
+  const total = costPrimaire + costPorteRampe + costRampe + costCanne + costAsperseur;
+
+  useEffect(() => {
+    saveLive({ costInputs: {
+      methodePerte, materiauCout, pressionPompe, pressionRequiseGoutteur, denivele,
+      jPrimaire, jPorteRampe, jRampe, denivelePrimaireSeg, denivelePorteRampeSeg, deniveleRampeSeg,
+      prixPrimaire, prixPorteRampe, prixRampe, longueurCanne, prixCanne, prixAsperseur,
+    }});
+  }, [methodePerte, materiauCout, pressionPompe, pressionRequiseGoutteur, denivele, jPrimaire, jPorteRampe, jRampe,
+      denivelePrimaireSeg, denivelePorteRampeSeg, deniveleRampeSeg, prixPrimaire, prixPorteRampe, prixRampe,
+      longueurCanne, prixCanne, prixAsperseur]);
+
+  // --- Graphique du rapport ---
+  const monthly = useMemo(() => {
+    if (!monthlyData || !monthlyData.table) return [];
+    return monthlyData.table.map(r => {
+      const etoM3 = r.etoMois * 10 * (monthlyData.superficie / 10000);
+      const doseBruteM3 = r.doseBrute * 30;
+      const besoinNetM3 = doseBruteM3 - etoM3;
+      return { month: r.month, etoM3, doseBruteM3, besoinNetM3 };
+    });
+  }, [monthlyData]);
+
+  // --- Export PDF ---
+  const handleDownloadPDF = () => {
+    if (!window.jspdf) { alert("Le générateur PDF n'a pas pu se charger — vérifie ta connexion et réessaie."); return; }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: "mm", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const navy = [23, 50, 77], teal = [29, 111, 91], grey = [96, 112, 125];
+    const fmt = (n) => Math.round(n).toLocaleString("en-US").replace(/,/g, " ");
+
+    doc.setFillColor(...navy);
+    doc.rect(0, 0, pageW, 32, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(16);
+    doc.text("TOURÉ OUOLO AIMÉ CÉSAR", 14, 14);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+    doc.text("Ingénierie hydroagricole — Rapport technique de dimensionnement", 14, 21);
+    doc.setFontSize(9);
+    doc.text(`Culture : ${cropName || "—"}  ·  Généré le ${new Date().toLocaleDateString("fr-FR")}`, 14, 27);
+
+    let y = 40;
+    doc.setTextColor(...navy); doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+    doc.text("1. Caractéristiques de la parcelle", 14, y); y += 6;
+    doc.setFont("helvetica", "normal"); doc.setTextColor(...grey); doc.setFontSize(10);
+    doc.text(`Surface : ${(superficie/10000).toFixed(4)} ha   ·   Dimensions : ${largeur} × ${longueur} m`, 14, y); y += 10;
+
+    doc.setTextColor(...navy); doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+    doc.text("2. Coût estimatif de la tuyauterie", 14, y); y += 4;
+    doc.autoTable({
+      startY: y,
+      head: [["Élément", "Longueur (m)", "Diamètre", "Prix unit. (FCFA/m)", "Coût (FCFA)"]],
+      body: [
+        ["Canalisation primaire", longueurPrimaire, calc ? `Ø${calc.diamPrimaire}mm` : "—", fmt(prixPrimaire||0), fmt(costPrimaire)],
+        ["Porte-rampe", longueurPorteRampe, calc ? `Ø${calc.diamPorteRampe}mm` : "—", fmt(prixPorteRampe||0), fmt(costPorteRampe)],
+        [estGoutte ? "Rampe (goutteur intégré)" : "Rampe", longueurRampe.toFixed(0), diamRampeFinal ? `Ø${diamRampeFinal}mm` : "—", fmt(prixRampe), fmt(costRampe)],
+        ...(!estGoutte ? [
+          ["Canne d'aspersion", `${longueurCanneTotale.toFixed(1)} (${nbArroseurs.toFixed(0)}×${longueurCanne}m)`, diamCanne ? `Ø${diamCanne}mm` : "—", fmt(prixCanne||0), fmt(costCanne)],
+          ["Asperseur", `${nbArroseurs.toFixed(0)} unité(s)`, "—", fmt(prixAsperseur), fmt(costAsperseur)],
+        ] : []),
+      ],
+      foot: [["", "", "", "TOTAL", fmt(total) + " FCFA"]],
+      theme: "grid",
+      headStyles: { fillColor: navy, textColor: 255, fontSize: 9 },
+      footStyles: { fillColor: [234, 243, 239], textColor: navy, fontStyle: "bold", fontSize: 9 },
+      bodyStyles: { fontSize: 9, textColor: [40,50,60] },
+      margin: { left: 14, right: 14 },
+    });
+    y = doc.lastAutoTable.finalY + 10;
+
+    if (hydraulique) {
+      if (y > 230) { doc.addPage(); y = 20; }
+      doc.setTextColor(...navy); doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+      doc.text("3. Vérification hydraulique", 14, y); y += 4;
+      doc.setFont("helvetica", "normal"); doc.setTextColor(...grey); doc.setFontSize(9);
+      doc.text(`Méthode : ${hydraulique.methode === "darcy" ? "Darcy-Weisbach (calculée)" : "Abaque manuel (J en cm/m)"}`, 14, y); y += 4;
+
+      if (hydraulique.methode === "darcy") {
+        doc.autoTable({
+          startY: y,
+          head: [["Tronçon", "Vitesse (m/s)", "Reynolds", "Perte de charge (m)"]],
+          body: [
+            ["Primaire", hydraulique.lPrimaire.v.toFixed(2), hydraulique.lPrimaire.re.toFixed(0), hydraulique.lPrimaire.perte.toFixed(3)],
+            ["Porte-rampe", hydraulique.lPorteRampe.v.toFixed(2), hydraulique.lPorteRampe.re.toFixed(0), hydraulique.lPorteRampe.perte.toFixed(3)],
+            ["Rampe", hydraulique.lRampe.v.toFixed(2), hydraulique.lRampe.re.toFixed(0), hydraulique.lRampe.perte.toFixed(3)],
+          ],
+          foot: [["Total cumulé", "", "", hydraulique.perteTotaleM.toFixed(3) + " m"]],
+          theme: "grid",
+          headStyles: { fillColor: navy, textColor: 255, fontSize: 9 },
+          footStyles: { fillColor: [234, 243, 239], textColor: navy, fontStyle: "bold", fontSize: 9 },
+          bodyStyles: { fontSize: 9, textColor: [40,50,60] },
+          margin: { left: 14, right: 14 },
+        });
+      } else {
+        doc.autoTable({
+          startY: y,
+          head: [["Tronçon", "J (cm/m)", "Longueur (m)", "Dénivelé (m)", "Perte de charge (m)"]],
+          body: hydraulique.segments.map(s => [s.nom, s.j, s.longueur.toFixed(1), s.denivele, s.perte.toFixed(3)]),
+          foot: [["Total cumulé", "", "", "", hydraulique.perteTotaleM.toFixed(3) + " m"]],
+          theme: "grid",
+          headStyles: { fillColor: navy, textColor: 255, fontSize: 9 },
+          footStyles: { fillColor: [234, 243, 239], textColor: navy, fontStyle: "bold", fontSize: 9 },
+          bodyStyles: { fontSize: 9, textColor: [40,50,60] },
+          margin: { left: 14, right: 14 },
+        });
+      }
+      y = doc.lastAutoTable.finalY + 6;
+      doc.setFontSize(10); doc.setFont("helvetica", "bold");
+      doc.setTextColor(...(hydraulique.suffisant ? teal : [180,90,30]));
+      const msg = hydraulique.suffisant
+        ? `Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar (suffisante, ≥ ${pressionRequiseGoutteur} bar requis).`
+        : `Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar (insuffisante, < ${pressionRequiseGoutteur} bar requis).`;
+      doc.text(doc.splitTextToSize(msg, pageW - 28), 14, y);
+      y += 14;
+    }
+
+    const pageH = doc.internal.pageSize.getHeight();
+    doc.setDrawColor(220,225,225); doc.line(14, pageH-18, pageW-14, pageH-18);
+    doc.setFontSize(8); doc.setTextColor(...grey); doc.setFont("helvetica", "normal");
+    doc.text("Outil de pré-dimensionnement — à valider par étude détaillée. E-mail : ouolo.3.toure@gmail.com · WhatsApp : +225 07 89 42 61 41", 14, pageH-12);
+
+    doc.save(`rapport-hydroagricole${cropName ? "-" + cropName.replace(/\s+/g,"_") : ""}.pdf`);
+  };
+
+  if (!dripData) {
+    return (
+      <div className="min-h-screen bg-[#f5f8f6]">
+        <PageHeader title="Coût & Rapport" />
+        <PageNav current="cout.html" />
+        <main className="max-w-5xl mx-auto px-6 py-8">
+          <p className="text-sm text-[#60707d]">Renseigne d'abord la page « Conception réseau » pour activer ce rapport.</p>
+        </main>
+        <PageFooter />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f5f8f6]">
+      <PageHeader title="Coût & Rapport" />
+      <PageNav current="cout.html" />
+      <main className="max-w-5xl mx-auto px-6 py-8">
+
+        <div className="flex items-center justify-between mb-4 print:hidden">
+          <div></div>
+          <button onClick={handleDownloadPDF}
+            className="flex items-center gap-2 bg-[#1d6f5b] text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#175a4a] transition-colors">
+            ⬇ Télécharger le rapport (PDF)
+          </button>
+        </div>
+
+        <div id="rapport-impression">
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            <Field label="Culture" hint="Modifiable sur la page Accueil">
+              <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 text-[#17324d] font-medium">{cropName || "—"}</div>
+            </Field>
+            <Field label="Surface" unit="ha" hint="Auto — depuis Bilan sol-eau-culture">
+              <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{(superficie/10000).toFixed(4)}</div>
+            </Field>
+            <Field label="Dimensions" hint="Largeur × Longueur">
+              <div className="w-full rounded-lg border border-[#dce5e1] bg-[#f5f8f6] px-3 py-2 font-mono text-[#60707d]">{largeur} × {longueur} m</div>
+            </Field>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-[#dce5e1] mb-6">
+            <table className="w-full text-sm">
+              <thead className="bg-[#17324d] text-white">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">Élément</th>
+                  <th className="text-left px-3 py-2 font-medium">Longueur (m)</th>
+                  <th className="text-left px-3 py-2 font-medium">Diamètre</th>
+                  <th className="text-left px-3 py-2 font-medium">Prix unitaire (FCFA/m)</th>
+                  <th className="text-left px-3 py-2 font-medium">Coût (FCFA)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="bg-white">
+                  <td className="px-3 py-1.5 font-medium text-[#17324d]">Canalisation primaire</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{longueurPrimaire}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{calc ? `Ø${calc.diamPrimaire}mm` : "—"}</td>
+                  <td className="px-2 py-1.5"><input type="number" value={prixPrimaire || ""} onChange={(e)=>setPrixPrimaire(parseFloat(e.target.value)||0)} className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" /></td>
+                  <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{costPrimaire.toLocaleString("fr-FR",{maximumFractionDigits:0})}</td>
+                </tr>
+                <tr className="bg-[#f5f8f6]">
+                  <td className="px-3 py-1.5 font-medium text-[#17324d]">Porte-rampe</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{longueurPorteRampe}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{calc ? `Ø${calc.diamPorteRampe}mm` : "—"}</td>
+                  <td className="px-2 py-1.5"><input type="number" value={prixPorteRampe || ""} onChange={(e)=>setPrixPorteRampe(parseFloat(e.target.value)||0)} className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" /></td>
+                  <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{costPorteRampe.toLocaleString("fr-FR",{maximumFractionDigits:0})}</td>
+                </tr>
+                <tr className="bg-white">
+                  <td className="px-3 py-1.5 font-medium text-[#17324d]">{estGoutte ? "Rampe (tuyau à goutteur intégré)" : "Rampe"}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{longueurRampe.toFixed(0)}</td>
+                  <td className="px-3 py-1.5 font-mono text-[#60707d]">{diamRampeFinal ? `Ø${diamRampeFinal}mm` : "—"}</td>
+                  <td className="px-2 py-1.5"><input type="number" value={prixRampe} onChange={(e)=>setPrixRampe(parseFloat(e.target.value)||0)} className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" /></td>
+                  <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{costRampe.toLocaleString("fr-FR",{maximumFractionDigits:0})}</td>
+                </tr>
+                {!estGoutte && (
+                  <>
+                    <tr className="bg-[#f5f8f6]">
+                      <td className="px-3 py-1.5 font-medium text-[#17324d]">Canne d'aspersion <span className="text-[10px] text-[#60707d] font-normal">({nbArroseurs.toFixed(0)} unité(s), = nb. asperseurs)</span></td>
+                      <td className="px-3 py-1.5 font-mono text-[#60707d]">{longueurCanneTotale.toFixed(1)} m <span className="text-[10px]">({nbArroseurs.toFixed(0)}×{longueurCanne}m)</span></td>
+                      <td className="px-3 py-1.5 font-mono text-[#60707d]">{diamCanne ? `Ø${diamCanne}mm` : "—"}</td>
+                      <td className="px-2 py-1.5"><input type="number" value={prixCanne || ""} onChange={(e)=>setPrixCanne(parseFloat(e.target.value)||0)} className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" /></td>
+                      <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{costCanne.toLocaleString("fr-FR",{maximumFractionDigits:0})}</td>
+                    </tr>
+                    <tr className="bg-white">
+                      <td className="px-3 py-1.5 font-medium text-[#17324d]">Asperseur</td>
+                      <td className="px-3 py-1.5 font-mono text-[#60707d]">{nbArroseurs.toFixed(0)} unité(s)</td>
+                      <td className="px-3 py-1.5 font-mono text-[#60707d]">—</td>
+                      <td className="px-2 py-1.5"><input type="number" value={prixAsperseur} onChange={(e)=>setPrixAsperseur(parseFloat(e.target.value)||0)} className="w-24 rounded border border-[#dce5e1] px-2 py-1 font-mono text-[#17324d]" /></td>
+                      <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{costAsperseur.toLocaleString("fr-FR",{maximumFractionDigits:0})}</td>
+                    </tr>
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {rampeCheck && (
+            <div className={`rounded-lg border px-4 py-3 mb-6 text-sm ${rampeCheck.suffisant ? "bg-[#eaf3ef] border-[#c9dcd3] text-[#2a4a3d]" : "bg-[#fdf1e7] border-[#eccaa8] text-[#7a4a1f]"}`}>
+              {rampeCheck.suffisant ? (
+                <>✓ Le diamètre retenu (Ø16mm) est cohérent : vitesse réelle {rampeCheck.vReelle.toFixed(2)} m/s dans la rampe (diamètre théorique requis à 1,0 m/s : {rampeCheck.diamTheorique.toFixed(1)}mm).</>
+              ) : (
+                <>⚠ Le diamètre fixé (Ø16mm) pourrait être sous-dimensionné : vitesse réelle {rampeCheck.vReelle.toFixed(2)} m/s, diamètre théorique requis à 1,0 m/s : {rampeCheck.diamTheorique.toFixed(1)}mm. Envisage un Ø20mm.</>
+              )}
+            </div>
+          )}
+
+          <div className="mb-6">
+            <div className="text-sm font-semibold text-[#17324d] mb-2">Vérification hydraulique — pression au goutteur le plus défavorable</div>
+            <div className="grid md:grid-cols-3 gap-4 mb-4">
+              <Field label="Méthode de perte de charge">
+                <Select value={methodePerte === "darcy" ? "Darcy-Weisbach (calculée)" : "Abaque manuel (J en cm/m)"}
+                  onChange={(v) => setMethodePerte(v.startsWith("Darcy") ? "darcy" : "manuel")}
+                  options={["Darcy-Weisbach (calculée)", "Abaque manuel (J en cm/m)"]} />
+              </Field>
+              <Field label="Pression pompe" unit="bar"><NumberInput value={pressionPompe} onChange={setPressionPompe} step="0.1" /></Field>
+              <Field label="Pression requise au goutteur" unit="bar" hint="Typique : 1 bar (goutteur intégré)"><NumberInput value={pressionRequiseGoutteur} onChange={setPressionRequiseGoutteur} step="0.1" /></Field>
+            </div>
+
+            {methodePerte === "darcy" ? (
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                <Field label="Matériau (rugosité)" hint={`k = ${rugositeCout} mm — même liste que la page Réseau`}>
+                  <Select value={materiauCout} onChange={setMateriauCout} options={Object.keys(ROUGHNESS_OPTIONS)} />
+                </Field>
+                <Field label="Dénivelé pompe → point défavorable" unit="m" hint="+ si le champ est plus haut que la pompe">
+                  <NumberInput value={denivele} onChange={setDenivele} step="0.5" />
+                </Field>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-3 gap-4 mb-4">
+                <Field label="J primaire" unit="cm/m" hint="Abaque fournisseur"><NumberInput value={jPrimaire} onChange={setJPrimaire} step="0.1" /></Field>
+                <Field label="J porte-rampe" unit="cm/m" hint="Abaque fournisseur"><NumberInput value={jPorteRampe} onChange={setJPorteRampe} step="0.1" /></Field>
+                <Field label="J rampe" unit="cm/m" hint="Abaque fournisseur"><NumberInput value={jRampe} onChange={setJRampe} step="0.1" /></Field>
+                <Field label="Dénivelé primaire" unit="m"><NumberInput value={denivelePrimaireSeg} onChange={setDenivelePrimaireSeg} step="0.5" /></Field>
+                <Field label="Dénivelé porte-rampe" unit="m"><NumberInput value={denivelePorteRampeSeg} onChange={setDenivelePorteRampeSeg} step="0.5" /></Field>
+                <Field label="Dénivelé rampe" unit="m"><NumberInput value={deniveleRampeSeg} onChange={setDeniveleRampeSeg} step="0.5" /></Field>
+              </div>
+            )}
+
+            {hydraulique && hydraulique.methode === "darcy" && (
+              <>
+                <div className="overflow-x-auto rounded-xl border border-[#dce5e1] mb-4">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#17324d] text-white">
+                      <tr><th className="text-left px-3 py-2 font-medium">Tronçon</th><th className="text-left px-3 py-2 font-medium">Vitesse (m/s)</th><th className="text-left px-3 py-2 font-medium">Reynolds</th><th className="text-left px-3 py-2 font-medium">Perte de charge (m)</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr className="bg-white">
+                        <td className="px-3 py-1.5 font-medium text-[#17324d]">Primaire</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lPrimaire.v.toFixed(2)}</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lPrimaire.re.toFixed(0)}</td>
+                        <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{hydraulique.lPrimaire.perte.toFixed(3)}</td>
+                      </tr>
+                      <tr className="bg-[#f5f8f6]">
+                        <td className="px-3 py-1.5 font-medium text-[#17324d]">Porte-rampe</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lPorteRampe.v.toFixed(2)}</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lPorteRampe.re.toFixed(0)}</td>
+                        <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{hydraulique.lPorteRampe.perte.toFixed(3)}</td>
+                      </tr>
+                      <tr className="bg-white">
+                        <td className="px-3 py-1.5 font-medium text-[#17324d]">Rampe (jusqu'au dernier goutteur)</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lRampe.v.toFixed(2)}</td>
+                        <td className="px-3 py-1.5 font-mono text-[#60707d]">{hydraulique.lRampe.re.toFixed(0)}</td>
+                        <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{hydraulique.lRampe.perte.toFixed(3)}</td>
+                      </tr>
+                      <tr className="bg-[#17324d] text-white font-semibold">
+                        <td className="px-3 py-1.5">Total cumulé</td><td className="px-3 py-1.5"></td><td className="px-3 py-1.5"></td>
+                        <td className="px-3 py-1.5 font-mono">{hydraulique.perteTotaleM.toFixed(3)} m</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div className={`rounded-lg border px-4 py-3 text-sm font-medium ${hydraulique.suffisant ? "bg-[#eaf3ef] border-[#c9dcd3] text-[#2a4a3d]" : "bg-[#fdf1e7] border-[#eccaa8] text-[#7a4a1f]"}`}>
+                  {hydraulique.suffisant
+                    ? `✓ Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar — suffisante (≥ ${pressionRequiseGoutteur} bar requis).`
+                    : `⚠ Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar — insuffisante (< ${pressionRequiseGoutteur} bar requis). Augmente la pression pompe, réduis les longueurs, ou augmente les diamètres.`}
+                </div>
+              </>
+            )}
+
+            {hydraulique && hydraulique.methode === "manuel" && (
+              <>
+                <div className="overflow-x-auto rounded-xl border border-[#dce5e1] mb-4">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#17324d] text-white">
+                      <tr><th className="text-left px-3 py-2 font-medium">Tronçon</th><th className="text-left px-3 py-2 font-medium">J (cm/m)</th><th className="text-left px-3 py-2 font-medium">Longueur (m)</th><th className="text-left px-3 py-2 font-medium">Dénivelé (m)</th><th className="text-left px-3 py-2 font-medium">Perte de charge (m)</th></tr>
+                    </thead>
+                    <tbody>
+                      {hydraulique.segments.map((s, i) => (
+                        <tr key={s.nom} className={i % 2 ? "bg-[#f5f8f6]" : "bg-white"}>
+                          <td className="px-3 py-1.5 font-medium text-[#17324d]">{s.nom}</td>
+                          <td className="px-3 py-1.5 font-mono text-[#60707d]">{s.j}</td>
+                          <td className="px-3 py-1.5 font-mono text-[#60707d]">{s.longueur.toFixed(1)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[#60707d]">{s.denivele}</td>
+                          <td className="px-3 py-1.5 font-mono font-semibold text-[#1d6f5b]">{s.perte.toFixed(3)}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-[#17324d] text-white font-semibold">
+                        <td className="px-3 py-1.5">Total cumulé</td><td className="px-3 py-1.5"></td><td className="px-3 py-1.5"></td><td className="px-3 py-1.5"></td>
+                        <td className="px-3 py-1.5 font-mono">{hydraulique.perteTotaleM.toFixed(3)} m</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div className={`rounded-lg border px-4 py-3 text-sm font-medium ${hydraulique.suffisant ? "bg-[#eaf3ef] border-[#c9dcd3] text-[#2a4a3d]" : "bg-[#fdf1e7] border-[#eccaa8] text-[#7a4a1f]"}`}>
+                  {hydraulique.suffisant
+                    ? `✓ Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar — suffisante (≥ ${pressionRequiseGoutteur} bar requis).`
+                    : `⚠ Pression disponible au goutteur le plus défavorable : ${hydraulique.pressionDisponible.toFixed(2)} bar — insuffisante (< ${pressionRequiseGoutteur} bar requis). Augmente la pression pompe, réduis les longueurs, ou revois l'abaque J.`}
+                </div>
+              </>
+            )}
+
+            <p className="text-xs text-[#60707d] mt-2">
+              {methodePerte === "darcy"
+                ? "Hypothèse simplificatrice : la perte de charge de la rampe est calculée sur sa longueur totale au débit d'entrée (cas le plus défavorable ; en réalité le débit décroît le long de la rampe au fur et à mesure des goutteurs)."
+                : "Méthode reprise du fichier Excel : J (perte de charge, cm/m) saisi par tronçon selon l'abaque du fournisseur, dénivelé par tronçon (+ = montée)."}
+            </p>
+          </div>
+
+          <ResultCard big label={`Coût total tuyauterie${cropName ? " — " + cropName : ""}`} value={total.toLocaleString("fr-FR",{maximumFractionDigits:0})} unit="FCFA" />
+          <p className="text-xs text-[#60707d] mt-2">
+            N'inclut pas : raccords, vannes, filtre, pompe, goutteurs séparés (si non intégrés), main-d'œuvre de pose.
+            Prix indicatifs à confirmer avant tout achat.
+          </p>
+
+          {monthly.length > 0 && (
+            <div className="rounded-xl border border-[#dce5e1] bg-white p-4 mt-6">
+              <div className="text-xs font-semibold text-[#60707d] mb-3">
+                PROFIL HYDRIQUE{cropName ? ` — ${cropName}` : ""} — ETo + Besoin net (empilé) vs Dose brute
+              </div>
+              <StackedAreaChart monthly={monthly} />
+            </div>
+          )}
+        </div>
+
+      </main>
+      <PageFooter />
+    </div>
+  );
+}
+
+function Root() {
+  return <IdentityGate><CostContent /></IdentityGate>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+</script>
+</body>
+</html>
