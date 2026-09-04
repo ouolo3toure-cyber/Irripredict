@@ -122,56 +122,85 @@ function computeDripData(di, largeur, longueur) {
 // Aspersion : P_th, P, E_réel, A, R_marge, D_asperseur — densité au format "E_ligne x E_cible"
 function computeAspersionData(ai, largeur, longueur) {
   const a = ai || {};
-  const sens = a.sens || "Largeur";
+  const raisonnement = a.raisonnement || "ligne"; // "ligne" | "interligne"
   const modeIrrigation = a.modeIrrigation ?? 2;
   const effMotopompe = a.effMotopompe ?? 0.75;
   const debitUnitaire = a.debitUnitaire ?? 1.2;
-  const densite = a.densite ?? "3 x 2.5";
-  const xBord = a.xBord ?? 4;
+  const densite = a.densite ?? "2 x 2.5"; // "A x B" : A = entre plantes sur la ligne, B = entre lignes de plantation
+  const xBord = a.xBord ?? 4;  // x : bord (bout de ligne) → 1ère/dernière plante
+  const yBord = a.yBord ?? 4;  // y : bord latéral → 1ère/dernière ligne
   const margeM = a.margeM ?? 1;
   const conserverDebit = a.conserverDebit || "Oui";
 
+  const zeroed = { nbLignes: 0, nbArroseurParLigne: 0, nbArroseursTotal: 0, qRampe: 0, qParcelleBrut: 0, qMotopompe: null,
+    longueurTotaleRampes: 0, longueurUneRampe: 0, qParcelleRetenu: 0, qPrimaire: 0, pluviometrie: 0, debitUnitaire,
+    rayonJetRequis: 0, diamAsperseurRequis: 0, A: 0, B: 0, P: 0, nLignesPlantation: 0, espacementTheorique: 0,
+    A_impair: 0, A_pair: 0, E_asp: 0, nTuyaux: 0, positionPremierTuyau: 0, ecartementTuyaux: 0,
+    nbTuyauxImpairs: 0, nbTuyauxPairs: 0, raisonnement,
+    modeIrrigation, conserverDebit, type: "aspersion", densiteValid: false };
+
   const parts = densite.split(/[xX*]/).map(s => parseFloat(s.trim()));
   const valid = parts.length === 2 && parts.every(n => !isNaN(n) && n > 0);
-  if (!valid) {
-    return { nbLignes: 0, nbArroseurParLigne: 0, nbArroseursTotal: 0, qRampe: 0, qParcelleBrut: 0, qMotopompe: null,
-      longueurTotaleRampes: 0, longueurUneRampe: 0, qParcelleRetenu: 0, qPrimaire: 0, pluviometrie: 0, debitUnitaire,
-      Pth_r: 0, P_r: 0, Ereel_r: 0, Rmarge_r: 0, Pth_l: 0, P_l: 0, Ereel_l: 0, Rmarge_l: 0, rayonJetRequis: 0, diamAsperseurRequis: 0,
-      modeIrrigation, conserverDebit, type: "aspersion", densiteValid: false };
+  if (!valid) return zeroed;
+
+  const A = parts[0]; // espacement entre deux plantes sur la ligne
+  const B = parts[1]; // espacement entre deux lignes de plantation
+  const L = longueur; // longueur de la parcelle
+  const Larg = largeur; // largeur de la parcelle
+
+  if (L - 2*xBord <= 0 || Larg - 2*yBord <= 0) return zeroed;
+
+  // 1. Rayon et diamètre de l'asperseur
+  const R = B + margeM;
+  const diamAsperseurRequis = 2 * R;
+
+  // 2. Structure de la plantation
+  const P = Math.floor((L - 2*xBord) / A + 1); // nombre de plantes par ligne
+  const nLignesPlantation = Math.floor((Larg - 2*yBord) / B + 1); // nombre total de lignes de plantation
+
+  // 4. Asperseurs sur une ligne de tuyau (motif triangulaire)
+  const espacementTheorique = R * 1.732;
+  const A_impair = Math.max(1, Math.floor((L - 2*xBord) / espacementTheorique + 1));
+  const E_asp = A_impair > 1 ? (L - 2*xBord) / (A_impair - 1) : (L - 2*xBord);
+  const A_pair = Math.max(0, A_impair - 1);
+
+  // 3. Structure du réseau (selon le raisonnement choisi)
+  let nTuyaux, positionPremierTuyau, ecartementTuyaux;
+  if (raisonnement === "ligne") {
+    nTuyaux = Math.ceil(nLignesPlantation / 2);
+    positionPremierTuyau = yBord;
+    ecartementTuyaux = 2 * B;
+  } else {
+    nTuyaux = Math.max(0, Math.ceil((nLignesPlantation - 1) / 2));
+    positionPremierTuyau = yBord + B / 2;
+    ecartementTuyaux = 2 * B;
   }
-  const espacementLigne = parts[0], espacementArroseur = parts[1];
-  const L_rampe = sens === "Largeur" ? largeur : longueur;
-  const L_lignes = sens === "Largeur" ? longueur : largeur;
 
-  const Pth_r = (L_rampe - 2 * xBord) / espacementArroseur + 1;
-  const P_r = Math.floor(Pth_r);
-  const A_r = Math.max(0, P_r - 1);
-  const Ereel_r = A_r > 0 ? (L_rampe - 2 * xBord) / A_r : 0;
-  const Rmarge_r = xBord + Ereel_r / 2 + margeM;
+  const nbTuyauxImpairs = Math.ceil(nTuyaux / 2);
+  const nbTuyauxPairs = Math.floor(nTuyaux / 2);
+  const nbArroseursTotal = nbTuyauxImpairs * A_impair + nbTuyauxPairs * A_pair;
 
-  const Pth_l = (L_lignes - 2 * xBord) / espacementLigne + 1;
-  const P_l = Math.floor(Pth_l);
-  const A_l = Math.max(0, P_l - 1);
-  const Ereel_l = A_l > 0 ? (L_lignes - 2 * xBord) / A_l : 0;
-  const Rmarge_l = xBord + Ereel_l / 2 + margeM;
+  const qRampeImpair = A_impair * debitUnitaire;
+  const qRampePair = A_pair * debitUnitaire;
+  const qParcelleBrut = nbTuyauxImpairs * qRampeImpair + nbTuyauxPairs * qRampePair;
+  const qRampe = qRampeImpair; // débit le plus défavorable (ligne impaire, la plus chargée), utilisé pour dimensionner la rampe
 
-  const rayonJetRequis = Math.max(Rmarge_r, Rmarge_l);
-  const diamAsperseurRequis = 2 * rayonJetRequis;
-  const nbArroseurParLigne = A_r, nbLignes = A_l;
-  const longueurUneRampe = Math.max(0, L_rampe - xBord);
-  const qRampe = nbArroseurParLigne * debitUnitaire;
-  const qParcelleBrut = nbLignes * qRampe;
+  const longueurUneRampe = Math.max(0, L - xBord); // longueur du tuyau jusqu'au dernier asperseur (approximation, identique impair/pair)
+  const longueurTotaleRampes = nTuyaux * longueurUneRampe;
+
   const qMotopompe = effMotopompe && modeIrrigation ? qParcelleBrut / (effMotopompe * modeIrrigation) : null;
-  const longueurTotaleRampes = nbLignes * longueurUneRampe;
   const qParcelleRetenu = conserverDebit === "Non" && modeIrrigation ? qParcelleBrut / modeIrrigation : qParcelleBrut;
   const qPrimaire = modeIrrigation ? qParcelleBrut / modeIrrigation : qParcelleBrut;
-  const nbArroseursTotal = nbLignes * nbArroseurParLigne;
-  const pluviometrie = (debitUnitaire / ((Ereel_l * Ereel_r) || (espacementLigne * espacementArroseur))) * 1000;
+  const pluviometrie = (debitUnitaire / (E_asp * ecartementTuyaux)) * 1000; // mm/h, indicatif (motif triangulaire, pas un vrai quadrillage)
 
-  return { nbLignes, nbArroseurParLigne, nbArroseursTotal, qRampe, qParcelleBrut, qMotopompe, longueurTotaleRampes,
-    longueurUneRampe, qParcelleRetenu, qPrimaire, pluviometrie, debitUnitaire,
-    Pth_r, P_r, Ereel_r, Rmarge_r, Pth_l, P_l, Ereel_l, Rmarge_l, rayonJetRequis, diamAsperseurRequis,
-    modeIrrigation, conserverDebit, type: "aspersion", densiteValid: true };
+  return {
+    nbLignes: nTuyaux, nbArroseurParLigne: A_impair, nbArroseursTotal, qRampe, qParcelleBrut, qMotopompe,
+    longueurTotaleRampes, longueurUneRampe, qParcelleRetenu, qPrimaire, pluviometrie, debitUnitaire,
+    rayonJetRequis: R, diamAsperseurRequis,
+    A, B, P, nLignesPlantation, espacementTheorique, A_impair, A_pair, E_asp, nTuyaux,
+    positionPremierTuyau, ecartementTuyaux, nbTuyauxImpairs, nbTuyauxPairs, raisonnement,
+    modeIrrigation, conserverDebit, type: "aspersion", densiteValid: true,
+  };
 }
 
 function getDesignData(live) {
@@ -334,12 +363,18 @@ const NAV_LINKS = [
 ];
 
 function PageNav({ current }) {
+  const activeRef = React.useRef(null);
+  useEffect(() => {
+    if (activeRef.current) {
+      activeRef.current.scrollIntoView({ behavior: "instant", inline: "center", block: "nearest" });
+    }
+  }, []);
   return (
     <nav className="bg-white border-b border-[#dce5e1] sticky top-0 z-10">
       <div className="max-w-5xl mx-auto px-6 flex gap-1 overflow-x-auto">
         {NAV_LINKS.map(l => (
-          <a key={l.href} href={l.href}
-            className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${current === l.href ? "border-[#1d6f5b] text-[#1d6f5b]" : "border-transparent text-[#60707d] hover:text-[#17324d]"}`}>
+          <a key={l.href} href={l.href} ref={current === l.href ? activeRef : null}
+            className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${current === l.href ? "border-[#1d6f5b] text-[#1d6f5b] bg-[#eaf3ef]" : "border-transparent text-[#60707d] hover:text-[#17324d]"}`}>
             {l.label}
           </a>
         ))}
