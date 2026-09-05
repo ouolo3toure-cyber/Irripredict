@@ -13,7 +13,6 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
 <style>
   body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
   .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -82,28 +81,6 @@ function HomeContent() {
           <Field label="Longueur parcelle" unit="m">
             <NumberInput value={live.longueur} onChange={(v) => update({ longueur: v })} step="0.1" />
           </Field>
-        </div>
-
-        <div className="mb-6">
-          <div className="text-sm font-medium text-[#17324d] mb-2">Type d'irrigation</div>
-          <div className="inline-flex rounded-lg border border-[#dce5e1] overflow-hidden">
-            <button onClick={() => update({ irrigationType: "goutte" })}
-              className={`px-4 py-2 text-sm font-semibold transition-colors ${live.irrigationType !== "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
-              💧 Goutte-à-goutte
-            </button>
-            <button onClick={() => update({ irrigationType: "aspersion" })}
-              className={`px-4 py-2 text-sm font-semibold transition-colors ${live.irrigationType === "aspersion" ? "bg-[#1d6f5b] text-white" : "bg-white text-[#60707d] hover:bg-[#f5f8f6]"}`}>
-              🌧 Aspersion
-            </button>
-          </div>
-        </div>
-
-        <div className="grid md:grid-cols-3 gap-4 mb-10">
-          {NAV_LINKS.filter(l => l.href !== "index.html").map(l => (
-            <a key={l.href} href={l.href} className="block rounded-xl border border-[#dce5e1] bg-white p-5 hover:border-[#1d6f5b] hover:shadow-md transition-all">
-              <div className="font-semibold text-[#17324d]">{l.label} →</div>
-            </a>
-          ))}
         </div>
 
         <div className="rounded-xl border border-[#dce5e1] bg-white p-5">
