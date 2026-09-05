@@ -365,7 +365,7 @@ const NAV_LINKS = [
 function PageNav({ current }) {
   const activeRef = React.useRef(null);
   useEffect(() => {
-    if (activeRef.current) {
+    if (activeRef.current && typeof activeRef.current.scrollIntoView === "function") {
       activeRef.current.scrollIntoView({ behavior: "instant", inline: "center", block: "nearest" });
     }
   }, []);
