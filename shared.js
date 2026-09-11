@@ -127,9 +127,9 @@ function computeAspersionData(ai, largeur, longueur) {
   const effMotopompe = a.effMotopompe ?? 0.75;
   const debitUnitaire = a.debitUnitaire ?? 1.2;
   const densite = a.densite ?? "2 x 2.5"; // "A x B" : A = entre plantes sur la ligne, B = entre lignes de plantation
-  const xBord = a.xBord ?? 4;  // x : bord (bout de ligne) → 1ère/dernière plante
-  const yBord = a.yBord ?? 4;  // y : bord latéral → 1ère/dernière ligne
-  const margeM = a.margeM ?? 1;
+  const xBord = a.xBord === "" || a.xBord == null ? 4 : parseFloat(a.xBord);  // x : bord (bout de ligne) → 1ère/dernière plante
+  const yBord = a.yBord === "" || a.yBord == null ? 4 : parseFloat(a.yBord);  // y : bord latéral → 1ère/dernière ligne
+  const margeM = a.margeM === "" || a.margeM == null ? 1 : parseFloat(a.margeM);
   const conserverDebit = a.conserverDebit || "Oui";
 
   const zeroed = { nbLignes: 0, nbArroseurParLigne: 0, nbArroseursTotal: 0, qRampe: 0, qParcelleBrut: 0, qMotopompe: null,
