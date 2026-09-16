@@ -22,6 +22,7 @@ const SOIL_DB = {
   "Argile bien structurée":             { fc: 0.50, wp: 0.30 },
 };
 const STD_DIAMETERS = [20,25,32,40,50,63,75,90,110,125,140,160,200,225,250,280,315];
+const COMMERCIAL_DIAMETER_OPTIONS = STD_DIAMETERS;
 const ROUGHNESS_OPTIONS = {
   "PVC / PEHD (lisse)": 0.0015,
   "Acier neuf": 0.045,
@@ -35,6 +36,25 @@ const VISCOSITE_EAU = 0.001; // Pa·s, eau à ≈20°C, fixe
 const MONTHS = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
 
 /* ---------------- Fonctions de calcul ---------------- */
+function resolveCommercialDiameter(flowM3H, targetVelocityMps = 1.2) {
+  const flowM3S = (Number(flowM3H) || 0) / 3600;
+  const areaM2 = flowM3S / Math.max(targetVelocityMps, 0.0001);
+  const theoreticalMm = Math.sqrt((4 * areaM2) / Math.PI) * 1000;
+  const suggestedMm = STD_DIAMETERS.find(d => d >= theoreticalMm) ?? null;
+  const maxCommercialMm = STD_DIAMETERS[STD_DIAMETERS.length - 1];
+  const insufficient = theoreticalMm > maxCommercialMm;
+  return {
+    theoretical_diameter_mm: Number(theoreticalMm.toFixed(2)),
+    commercial_diameter_suggested_mm: suggestedMm,
+    commercial_diameter_selected_mm: null,
+    retained_diameter_mm: null,
+    commercial_diameter_available: !insufficient,
+    commercial_diameter_insufficient: insufficient,
+    commercial_diameter_max_mm: maxCommercialMm,
+    commercial_diameter_status: insufficient ? "insufficient" : "available",
+  };
+}
+
 function frictionFactor(re, relRough) {
   if (!re || re <= 0) return null;
   if (re < 2300) return 64 / re; // régime laminaire
@@ -131,13 +151,15 @@ function computeAspersionData(ai, largeur, longueur) {
   const yBord = a.yBord === "" || a.yBord == null ? 4 : parseFloat(a.yBord);  // y : bord latéral → 1ère/dernière ligne
   const margeM = a.margeM === "" || a.margeM == null ? 1 : parseFloat(a.margeM);
   const conserverDebit = a.conserverDebit || "Oui";
+  const diametreArrosageUtilisateur = toNumber(a.diametreArrosageUtilisateur, null) ?? toNumber(a.diametreArrosageUser, null) ?? toNumber(a.irrigation_diameter_user_m, null);
 
-  const zeroed = { nbLignes: 0, nbArroseurParLigne: 0, nbArroseursTotal: 0, qRampe: 0, qParcelleBrut: 0, qMotopompe: null,
-    longueurTotaleRampes: 0, longueurUneRampe: 0, qParcelleRetenu: 0, qPrimaire: 0, pluviometrie: 0, debitUnitaire,
-    rayonJetRequis: 0, diamAsperseurRequis: 0, A: 0, B: 0, P: 0, nLignesPlantation: 0, espacementTheorique: 0,
-    A_impair: 0, A_pair: 0, E_asp: 0, nTuyaux: 0, positionPremierTuyau: 0, ecartementTuyaux: 0,
-    nbTuyauxImpairs: 0, nbTuyauxPairs: 0, raisonnement,
-    modeIrrigation, conserverDebit, type: "aspersion", densiteValid: false };
+  const zeroed = { nbLignes: null, nbArroseurParLigne: null, nbArroseursTotal: null, qRampe: null, qParcelleBrut: null, qMotopompe: null,
+    longueurTotaleRampes: null, longueurUneRampe: null, qParcelleRetenu: null, qPrimaire: null, pluviometrie: null, debitUnitaire,
+    rayonJetRequis: null, diamAsperseurRequis: null, diamAsperseurUtilisateur: null, diamAsperseurUtilise: null, sourceDiametreArrosage: "calculated", diametreArrosageErreur: null,
+    A: null, B: null, P: null, nLignesPlantation: null, espacementTheorique: null,
+    A_impair: null, A_pair: null, E_asp: null, nTuyaux: null, positionPremierTuyau: null, ecartementTuyaux: null,
+    nbTuyauxImpairs: null, nbTuyauxPairs: null, raisonnement,
+    modeIrrigation, conserverDebit, type: "aspersion", status: "invalid", densiteValid: false };
 
   const parts = densite.split(/[xX*]/).map(s => parseFloat(s.trim()));
   const valid = parts.length === 2 && parts.every(n => !isNaN(n) && n > 0);
@@ -151,8 +173,25 @@ function computeAspersionData(ai, largeur, longueur) {
   if (L - 2*xBord <= 0 || Larg - 2*yBord <= 0) return zeroed;
 
   // 1. Rayon et diamètre de l'asperseur
-  const R = B + margeM;
-  const diamAsperseurRequis = 2 * R;
+  const rayonRequis = B + margeM;
+  const diamAsperseurRequis = 2 * rayonRequis;
+  const diamAsperseurUtilisateur = diametreArrosageUtilisateur;
+  if (diamAsperseurUtilisateur != null && diamAsperseurUtilisateur < diamAsperseurRequis) {
+    return {
+      ...zeroed,
+      rayonJetRequis: rayonRequis,
+      diamAsperseurRequis,
+      diamAsperseurUtilisateur,
+      diamAsperseurUtilise: null,
+      sourceDiametreArrosage: "invalid",
+      diametreArrosageErreur: "Le diamètre d’arrosage choisi doit être supérieur ou égal au diamètre requis.",
+      status: "invalid",
+      densiteValid: true,
+    };
+  }
+  const sourceDiametreArrosage = diamAsperseurUtilisateur != null ? "user" : "calculated";
+  const diamAsperseurUtilise = diamAsperseurUtilisateur ?? diamAsperseurRequis;
+  const R = diamAsperseurUtilise / 2;
 
   // 2. Structure de la plantation
   const P = Math.floor((L - 2*xBord) / A + 1); // nombre de plantes par ligne
@@ -196,10 +235,10 @@ function computeAspersionData(ai, largeur, longueur) {
   return {
     nbLignes: nTuyaux, nbArroseurParLigne: A_impair, nbArroseursTotal, qRampe, qParcelleBrut, qMotopompe,
     longueurTotaleRampes, longueurUneRampe, qParcelleRetenu, qPrimaire, pluviometrie, debitUnitaire,
-    rayonJetRequis: R, diamAsperseurRequis,
+    rayonJetRequis: rayonRequis, diamAsperseurRequis, diamAsperseurUtilisateur, diamAsperseurUtilise, sourceDiametreArrosage, diametreArrosageErreur: null,
     A, B, P, nLignesPlantation, espacementTheorique, A_impair, A_pair, E_asp, nTuyaux,
     positionPremierTuyau, ecartementTuyaux, nbTuyauxImpairs, nbTuyauxPairs, raisonnement,
-    modeIrrigation, conserverDebit, type: "aspersion", densiteValid: true,
+    modeIrrigation, conserverDebit, type: "aspersion", status: "valid", densiteValid: true,
   };
 }
 
@@ -212,14 +251,365 @@ function getDesignData(live) {
 /* ---------------- Store (localStorage) ---------------- */
 const LIVE_KEY = "irripredict_live_v1";
 const PROJECTS_KEY = "irripredict_projects_v1";
+const DESIGN_SCHEMA_VERSION = "1.0.0";
+
+function toNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "" || value === " ") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeFraction(value) {
+  const number = toNumber(value, null);
+  if (number === null || number <= 0) return null;
+  const fraction = number > 1 ? number / 100 : number;
+  return fraction <= 1 ? fraction : null;
+}
+
+function ensureStableId(existing, prefix) {
+  if (existing && typeof existing === "string" && existing.trim()) return existing.trim();
+  const stamp = Date.now().toString(36);
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${stamp}-${random}`;
+}
+
+function normalizeDesignStatus(status) {
+  const valid = ["draft", "validated", "archived"];
+  return valid.includes(status) ? status : "draft";
+}
+
+function buildBaseDesignReference(live) {
+  const baseLive = live || {};
+  const inputMeta = baseLive.inputMeta || {};
+  const width = inputMeta.width_entered === true ? toNumber(baseLive.largeur, null) : null;
+  const length = inputMeta.length_entered === true ? toNumber(baseLive.longueur, null) : null;
+  const cropName = baseLive.cropName || baseLive.project_name || "Projet non nommé";
+  const calculationIrrigationType = baseLive.irrigationType === "aspersion" ? "aspersion" : "goutte";
+  const irrigationType = inputMeta.irrigation_type_entered === true ? calculationIrrigationType : null;
+  const designId = ensureStableId(baseLive.design_id, "DES");
+  const designDate = baseLive.design_reference?.metadata?.design_date || new Date().toISOString().slice(0, 10);
+  const designStatus = normalizeDesignStatus(baseLive.design_status || baseLive.design_reference?.metadata?.design_status || "draft");
+  const soilType = baseLive.bilanInputs?.soilType || null;
+  const soilInfo = soilType ? SOIL_DB[soilType] : null;
+  const areaHa = width != null && length != null ? (width * length) / 10000 : null;
+
+  const designData = getDesignData(baseLive);
+  const networkInputs = baseLive.networkInputs || {};
+  const material = networkInputs.material_user_set === true ? (networkInputs.materiau || null) : null;
+  const availablePressure = toNumber(networkInputs.pressionDisponible, null) ?? toNumber(baseLive.pressureDisponible, null);
+  const requiredPressure =
+    toNumber(networkInputs.pressionRequise, null) ??
+    toNumber(baseLive.requiredPressure, null) ??
+    toNumber(baseLive.aspersionInputs?.pressionService, null) ??
+    toNumber(baseLive.costInputs?.pressionRequiseGoutteur, null);
+  const sectorFlowM3H = toNumber(designData?.qPrimaire, null);
+  const pumpFlowM3H = toNumber(designData?.qMotopompe, null);
+  const networkFlowM3H = toNumber(
+    networkInputs.pipeType === "Rampe"
+      ? designData?.qRampe
+      : designData?.qPrimaire,
+    null
+  );
+  const velocity = toNumber(networkInputs.vitesse, null);
+  const reynolds = toNumber(networkInputs.reynolds, null);
+  const friction = toNumber(networkInputs.frictionFactor, null);
+  const headLoss = toNumber(networkInputs.perteCharge, null);
+  const theoreticalDiameter = toNumber(networkInputs.diametreTheorique, null) ?? toNumber(networkInputs.diamTheorique, null) ?? toNumber(networkInputs.diamCalc, null);
+  const suggestedDiameter = toNumber(networkInputs.diametreCommercialSuggere, null) ?? toNumber(networkInputs.commercialDiameterSuggested, null);
+  const selectedDiameter = toNumber(networkInputs.diametreCommercialChoisi, null) ?? toNumber(networkInputs.commercialDiameterSelected, null);
+  const retainedDiameter = toNumber(networkInputs.diametreRetenu, null);
+  const irrigationDiameterRequiredM = toNumber(designData?.diamAsperseurRequis, null) ?? toNumber(baseLive.aspersionInputs?.diametreArrosageRequis, null);
+  const irrigationDiameterUserM = toNumber(designData?.diamAsperseurUtilisateur, null);
+  const irrigationDiameterUsedM = toNumber(designData?.diamAsperseurUtilise, null);
+  const irrigationDiameterSource = designData?.sourceDiametreArrosage || (irrigationDiameterRequiredM != null ? "calculated" : "unknown");
+  const irrigationDiameterError = designData?.diametreArrosageErreur || null;
+
+  const sectors = Array.isArray(baseLive.sectors) && baseLive.sectors.length ? baseLive.sectors : [];
+
+  const sectionRecords = Array.isArray(baseLive.sections) && baseLive.sections.length
+    ? baseLive.sections.map((section, index) => ({
+        pipe_id: ensureStableId(section?.pipe_id || section?.section_id || `${baseLive.design_id || "P"}-${index + 1}`, "P"),
+        type: section?.type || networkInputs.pipeType || "primaire",
+        material: section?.material || material,
+        length_m: toNumber(section?.length_m, null) ?? toNumber(section?.longueur, null) ?? null,
+        flow_m3_h: toNumber(section?.flow_m3_h, null) ?? toNumber(section?.debit, null) ?? networkFlowM3H,
+        theoretical_diameter_mm: toNumber(section?.theoretical_diameter_mm, null) ?? theoreticalDiameter,
+        commercial_diameter_suggested_mm: toNumber(section?.commercial_diameter_suggested_mm, null) ?? suggestedDiameter,
+        commercial_diameter_selected_mm: toNumber(section?.commercial_diameter_selected_mm, null) ?? selectedDiameter,
+        retained_diameter_mm: toNumber(section?.retained_diameter_mm, null) ?? retainedDiameter,
+        commercial_diameter_status: section?.commercial_diameter_status || networkInputs.commercialDiameterStatus || null,
+        roughness_mm: toNumber(section?.roughness_mm, null) ?? toNumber(networkInputs.rugosite, null),
+        velocity_m_s: toNumber(section?.velocity_m_s, null) ?? velocity,
+        reynolds: toNumber(section?.reynolds, null) ?? reynolds,
+        friction_factor: toNumber(section?.friction_factor, null) ?? friction,
+        head_loss_m: toNumber(section?.head_loss_m, null) ?? headLoss,
+      }))
+    : [{
+        pipe_id: ensureStableId(baseLive.pipe_id, "P"),
+        type: "primaire",
+        material,
+        length_m: toNumber(networkInputs.longueur, null),
+        flow_m3_h: networkFlowM3H,
+        theoretical_diameter_mm: theoreticalDiameter,
+        commercial_diameter_suggested_mm: suggestedDiameter,
+        commercial_diameter_selected_mm: selectedDiameter,
+        retained_diameter_mm: retainedDiameter,
+        commercial_diameter_status: networkInputs.commercialDiameterStatus || null,
+        roughness_mm: toNumber(networkInputs.rugosite, null),
+        velocity_m_s: velocity,
+        reynolds: reynolds,
+        friction_factor: friction,
+        head_loss_m: headLoss,
+      }];
+
+  const pipes = Array.isArray(baseLive.pipes) && baseLive.pipes.length ? baseLive.pipes : sectionRecords;
+
+  const sprinklers = calculationIrrigationType === "aspersion" && designData && (designData.densiteValid || designData.diametreArrosageErreur) ? [{
+    type: "asperseur",
+    manufacturer: baseLive.aspersionInputs?.manufacturer || "",
+    model: baseLive.aspersionInputs?.model || "",
+    unit_flow_m3_h: toNumber(designData.debitUnitaire, null),
+    service_pressure_bar: toNumber(baseLive.aspersionInputs?.pressionService, null),
+    required_radius_m: toNumber(designData.rayonJetRequis, null),
+    required_irrigation_diameter_m: irrigationDiameterRequiredM,
+    irrigation_diameter_required_m: irrigationDiameterRequiredM,
+    user_irrigation_diameter_m: irrigationDiameterUserM,
+    irrigation_diameter_user_m: irrigationDiameterUserM,
+    used_irrigation_diameter_m: irrigationDiameterUsedM,
+    irrigation_diameter_used_m: irrigationDiameterUsedM,
+    irrigation_diameter_source: irrigationDiameterSource,
+    irrigation_diameter_error: irrigationDiameterError,
+    status: designData.status || (irrigationDiameterError ? "invalid" : "valid"),
+    required_diameter_m: irrigationDiameterRequiredM,
+    user_diameter_m: irrigationDiameterUserM,
+    used_diameter_m: irrigationDiameterUsedM,
+    diameter_source: irrigationDiameterSource,
+    spacing_m: toNumber(designData.espacementTheorique, null),
+    quantity: toNumber(designData.nbArroseursTotal, null),
+  }] : [];
+
+  const agronomy = {
+    soil_type: soilType,
+    field_capacity_fraction: baseLive.bilanInputs?.soilType ? toNumber(soilInfo?.fc, null) : null,
+    wilting_point_fraction: baseLive.bilanInputs?.soilType ? toNumber(soilInfo?.wp, null) : null,
+    bulk_density_g_cm3: toNumber(baseLive.bilanInputs?.densite, null),
+    // The current form stores profRacinaire directly in metres.
+    root_depth_m: toNumber(baseLive.bilanInputs?.profRacinaire, null),
+    mad_fraction: normalizeFraction(baseLive.bilanInputs?.mad),
+    irrigation_efficiency_fraction: normalizeFraction(baseLive.bilanInputs?.efficacite),
+    crop_name: cropName,
+    kc: toNumber(baseLive.bilanInputs?.kcVeg, null),
+  };
+
+  const systemCapacity = {
+    design_system_flow_m3_h: null,
+    maximum_design_flow_m3_h: toNumber(baseLive.maximum_design_flow_m3_h, null),
+    pump_design_flow_m3_h: toNumber(baseLive.pump_design_flow_m3_h, null) ?? pumpFlowM3H,
+    pump_max_flow_m3_h: toNumber(baseLive.pump_max_flow_m3_h, null),
+    minimum_operating_pressure_bar: toNumber(baseLive.minimum_operating_pressure_bar, null) ?? requiredPressure,
+    design_available_volume_m3_day: toNumber(baseLive.design_available_volume_m3_day, null),
+  };
+
+  const operationalConstraints = {
+    time_window_h_day: toNumber(baseLive.time_window_h_day, null),
+    maximum_runtime_h_day: toNumber(baseLive.maximum_runtime_h_day, null),
+    water_availability_m3_day: toNumber(baseLive.water_availability_m3_day, null),
+    energy_availability: baseLive.energy_availability ?? null,
+  };
+
+  const designMetadata = {
+    design_id: designId,
+    design_version: baseLive.design_version || "1",
+    design_date: designDate,
+    design_status: designStatus,
+    source_application: "IRRIPREDICT",
+  };
+
+  return {
+    schema_version: DESIGN_SCHEMA_VERSION,
+    exported_at: new Date().toISOString(),
+    source: {
+      application: "IRRIPREDICT",
+      application_version: baseLive.application_version || DESIGN_SCHEMA_VERSION,
+      design_id: designId,
+    },
+    project: {
+      project_id: ensureStableId(baseLive.project_id, "PRJ"),
+      project_name: cropName,
+    },
+    plot: {
+      plot_id: ensureStableId(baseLive.plot_id, "PLOT"),
+      plot_name: baseLive.plot_name || cropName,
+      area_ha: areaHa,
+      width_m: width,
+      length_m: length,
+    },
+    crop: {
+      crop_id: ensureStableId(baseLive.crop_id, "CROP"),
+      name: cropName,
+      cycle: baseLive.cycle || "",
+    },
+    design_reference: {
+      metadata: designMetadata,
+      flows: {
+        ramp_flow_m3_h: toNumber(designData?.qRampe, null),
+        field_gross_flow_m3_h: toNumber(designData?.qParcelleBrut, null),
+        field_retained_flow_m3_h: toNumber(designData?.qParcelleRetenu, null),
+        sector_flow_m3_h: sectorFlowM3H,
+        pump_required_flow_m3_h: pumpFlowM3H,
+        parallel_sectors: sectors.length ? toNumber(designData?.modeIrrigation, null) : null,
+      },
+      agronomy,
+      irrigation_system: {
+        system_id: ensureStableId(baseLive.system_id, "SYS"),
+        irrigation_type: irrigationType,
+        parallel_sectors: sectors.length
+          ? (toNumber(baseLive.parallel_sectors, baseLive?.dripInputs?.modeIrrigation ?? baseLive?.aspersionInputs?.modeIrrigation ?? 1) || 1)
+          : null,
+      },
+      pump: {
+        design_flow_m3_h: pumpFlowM3H,
+        design_head_m: toNumber(baseLive.pump_head_m, null),
+        power_kw: toNumber(baseLive.pump_power_kw, null),
+        efficiency_fraction: toNumber(baseLive.pump_efficiency_fraction, null),
+      },
+      sectors,
+      pipes,
+      sprinklers,
+      hydraulics: {
+        design_flow_m3_h: networkFlowM3H,
+        velocity_m_s: velocity,
+        reynolds: reynolds,
+        friction_factor: friction,
+        head_loss_m: headLoss,
+        required_pressure_bar: requiredPressure,
+        available_pressure_bar: availablePressure,
+      },
+      geometry: {
+        width_m: width,
+        length_m: length,
+        area_m2: width != null && length != null ? width * length : null,
+        area_ha: areaHa,
+      },
+    },
+    system_capacity: systemCapacity,
+    operational_constraints: operationalConstraints,
+    operational_data: Array.isArray(baseLive.operational_data) ? baseLive.operational_data : [],
+    derived_data: Array.isArray(baseLive.derived_data) ? baseLive.derived_data : [],
+  };
+}
+
+function migrateLiveData(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const migrated = { ...raw };
+
+  migrated.project_id = ensureStableId(migrated.project_id, "PRJ");
+  migrated.plot_id = ensureStableId(migrated.plot_id, "PLOT");
+  migrated.crop_id = ensureStableId(migrated.crop_id, "CROP");
+  migrated.system_id = ensureStableId(migrated.system_id, "SYS");
+  migrated.design_id = ensureStableId(migrated.design_id, "DES");
+  migrated.design_version = migrated.design_version && migrated.design_version !== DESIGN_SCHEMA_VERSION
+    ? migrated.design_version
+    : "1";
+  migrated.design_status = normalizeDesignStatus(migrated.design_status || "draft");
+  migrated.irrigationType = migrated.irrigationType === "aspersion" ? "aspersion" : (migrated.irrigationType || "goutte");
+
+  if (migrated.networkInputs) {
+    const hasExplicitCommercialSelection =
+      migrated.networkInputs.commercialDiameterSelected != null ||
+      migrated.networkInputs.diametreCommercialChoisi != null;
+    if (!hasExplicitCommercialSelection) {
+      migrated.networkInputs.commercialDiameterSelected = null;
+      migrated.networkInputs.diametreCommercialChoisi = null;
+      migrated.networkInputs.diametreRetenu = null;
+    }
+  }
+
+  migrated.source = migrated.source || {
+    application: "IRRIPREDICT",
+    application_version: migrated.application_version || DESIGN_SCHEMA_VERSION,
+    design_id: migrated.design_id,
+  };
+
+  if (!migrated.design_reference || !migrated.design_reference.metadata) {
+    const profile = buildBaseDesignReference(migrated);
+    migrated.design_reference = profile.design_reference;
+    migrated.schema_version = profile.schema_version;
+    migrated.exported_at = profile.exported_at;
+    migrated.source = profile.source;
+    migrated.project = profile.project;
+    migrated.plot = profile.plot;
+    migrated.crop = profile.crop;
+    migrated.system_capacity = profile.system_capacity;
+    migrated.operational_constraints = profile.operational_constraints;
+    migrated.operational_data = profile.operational_data;
+    migrated.derived_data = profile.derived_data;
+  }
+
+  migrated.design_reference.metadata = migrated.design_reference.metadata || {};
+  migrated.design_reference.metadata.design_id = migrated.design_reference.metadata.design_id || migrated.design_id;
+  migrated.design_reference.metadata.design_version = migrated.design_reference.metadata.design_version || migrated.design_version || DESIGN_SCHEMA_VERSION;
+  migrated.design_reference.metadata.design_date = migrated.design_reference.metadata.design_date || new Date().toISOString().slice(0, 10);
+  migrated.design_reference.metadata.design_status = normalizeDesignStatus(migrated.design_reference.metadata.design_status || migrated.design_status || "draft");
+  migrated.design_reference.metadata.source_application = "IRRIPREDICT";
+
+  if (!migrated.project) {
+    migrated.project = { project_id: migrated.project_id, project_name: migrated.cropName || "Projet non nommé" };
+  }
+  if (!migrated.plot) {
+    migrated.plot = { plot_id: migrated.plot_id, plot_name: migrated.cropName || "Projet non nommé", area_ha: ((toNumber(migrated.largeur, 100) * toNumber(migrated.longueur, 100)) / 10000), width_m: toNumber(migrated.largeur, 100), length_m: toNumber(migrated.longueur, 100) };
+  }
+  if (!migrated.crop) {
+    migrated.crop = { crop_id: migrated.crop_id, name: migrated.cropName || "", cycle: migrated.cycle || "" };
+  }
+
+  return migrated;
+}
+
+function normalizeLiveState(raw) {
+  const current = migrateLiveData(raw || {});
+  const next = { largeur: 100, longueur: 100, cropName: "", irrigationType: "goutte", ...current };
+  next.project_id = ensureStableId(next.project_id, "PRJ");
+  next.plot_id = ensureStableId(next.plot_id, "PLOT");
+  next.crop_id = ensureStableId(next.crop_id, "CROP");
+  next.system_id = ensureStableId(next.system_id, "SYS");
+  next.design_id = ensureStableId(next.design_id, "DES");
+  next.design_version = next.design_version || "1";
+  next.design_status = normalizeDesignStatus(next.design_status || "draft");
+  next.irrigationType = next.irrigationType === "aspersion" ? "aspersion" : "goutte";
+  const profile = buildBaseDesignReference(next);
+  next.design_reference = profile.design_reference;
+  next.design_reference.metadata.design_id = next.design_id;
+  next.design_reference.metadata.design_version = next.design_version;
+  next.design_reference.metadata.design_status = next.design_status;
+  next.schema_version = profile.schema_version;
+  next.exported_at = profile.exported_at;
+  next.source = profile.source;
+  next.project = profile.project;
+  next.plot = profile.plot;
+  next.crop = profile.crop;
+  next.system_capacity = profile.system_capacity;
+  next.operational_constraints = profile.operational_constraints;
+  next.operational_data = profile.operational_data;
+  next.derived_data = profile.derived_data;
+  return next;
+}
 
 function loadLive() {
-  try { const raw = localStorage.getItem(LIVE_KEY); return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
+  try {
+    const raw = localStorage.getItem(LIVE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const migrated = normalizeLiveState(parsed);
+    localStorage.setItem(LIVE_KEY, JSON.stringify(migrated));
+    return migrated;
+  } catch (e) {
+    return {};
+  }
 }
 function saveLive(partial) {
   try {
-    const current = loadLive();
-    const next = { ...current, ...partial };
+    const current = normalizeLiveState(loadLive());
+    const next = normalizeLiveState({ ...current, ...partial });
     localStorage.setItem(LIVE_KEY, JSON.stringify(next));
     return next;
   } catch (e) { return partial; }
@@ -229,6 +619,27 @@ function loadProjects() {
 }
 function saveProjects(projects) {
   try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)); } catch (e) {}
+}
+
+function exportDesignProfile(liveOverride) {
+  try {
+    const live = normalizeLiveState(liveOverride || loadLive());
+    const profile = buildBaseDesignReference(live);
+    const fileName = `irripredict-design-${live.design_id || profile.design_reference.metadata.design_id || "design"}-v${DESIGN_SCHEMA_VERSION}.json`;
+    const blob = new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return { fileName, profile };
+  } catch (e) {
+    console.error("exportDesignProfile", e);
+    return null;
+  }
 }
 
 /* ---------------- Composants UI communs ---------------- */

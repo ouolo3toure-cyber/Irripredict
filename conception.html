@@ -85,12 +85,14 @@ function AspersionForm({ largeur, longueur, ai, onChange }) {
   const [xBord, setXBord] = useState(ai.xBord ?? 4);
   const [yBord, setYBord] = useState(ai.yBord ?? 4);
   const [margeM, setMargeM] = useState(ai.margeM ?? 1);
+  const [diametreArrosageUtilisateur, setDiametreArrosageUtilisateur] = useState(ai.diametreArrosageUtilisateur ?? ai.diametreArrosageUser ?? "");
   const [conserverDebit, setConserverDebit] = useState(ai.conserverDebit ?? "Oui");
 
-  const aspersionInputs = { raisonnement, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, yBord, margeM, conserverDebit };
+  const aspersionInputs = { raisonnement, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, yBord, margeM, diametreArrosageUtilisateur, conserverDebit };
   const r = computeAspersionData(aspersionInputs, largeur, longueur);
+  const formatAspersion = (value, digits = 2) => value == null ? "—" : value.toFixed(digits);
 
-  useEffect(() => { onChange(aspersionInputs); }, [raisonnement, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, yBord, margeM, conserverDebit]);
+  useEffect(() => { onChange(aspersionInputs); }, [raisonnement, modeIrrigation, effMotopompe, debitUnitaire, pressionService, densite, xBord, yBord, margeM, diametreArrosageUtilisateur, conserverDebit]);
 
   return (
     <div className="grid md:grid-cols-2 gap-8">
@@ -120,6 +122,11 @@ function AspersionForm({ largeur, longueur, ai, onChange }) {
           <Field label="Pression de service" unit="bar" hint="Indicatif — valeur constructeur"><NumberInput value={pressionService} onChange={setPressionService} step="0.5" /></Field>
           <Field label="Efficacité motopompe" unit="0–1"><NumberInput value={effMotopompe} onChange={setEffMotopompe} step="0.05" /></Field>
           <Field label="Marge de sécurité sur le rayon (M)" unit="m" hint="0,5 à 1m"><NumberInput value={margeM} onChange={setMargeM} step="0.1" /></Field>
+          <Field label="Diamètre d'arrosage utilisateur" unit="m" hint="Facultatif — doit être supérieur ou égal au diamètre requis">
+            <input type="number" value={diametreArrosageUtilisateur} step="0.5" onChange={(e) => setDiametreArrosageUtilisateur(e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 font-mono text-[#17324d] focus:outline-none focus:ring-2 focus:ring-[#1d6f5b] focus:border-[#1d6f5b] ${r.diametreArrosageErreur ? "border-red-500" : "border-[#dce5e1]"}`} />
+            {r.diametreArrosageErreur && <span className="block text-xs text-red-600 mt-1">{r.diametreArrosageErreur}</span>}
+          </Field>
           <Field label="x — bord (bout de ligne) → 1ère/dernière plante" unit="m"><NumberInput value={xBord} onChange={setXBord} step="0.5" /></Field>
           <Field label="y — bord latéral → 1ère/dernière ligne" unit="m"><NumberInput value={yBord} onChange={setYBord} step="0.5" /></Field>
           <Field label="Conserver le débit parcelle quel que soit le mode ?" hint="Détermine le débit transmis au Bilan sol-eau">
@@ -134,8 +141,9 @@ function AspersionForm({ largeur, longueur, ai, onChange }) {
         <div className="rounded-xl border border-[#c9dcd3] bg-[#eaf3ef] p-4 mb-4">
           <div className="text-xs font-semibold text-[#2a4a3d] uppercase tracking-wide mb-2">Rayon et diamètre requis</div>
           <div className="grid grid-cols-2 gap-3">
-            <ResultCard big label="Rayon d'arrosage idéal (R = B + M)" value={r.rayonJetRequis.toFixed(2)} unit="m" />
-            <ResultCard big label="Diamètre d'arrosage requis" value={r.diamAsperseurRequis.toFixed(2)} unit="m" />
+            <ResultCard big label="Rayon d'arrosage idéal (R = B + M)" value={formatAspersion(r.rayonJetRequis)} unit="m" />
+            <ResultCard big label="Diamètre d'arrosage requis" value={formatAspersion(r.diamAsperseurRequis)} unit="m" />
+            <ResultCard big label="Diamètre d'arrosage utilisé" value={formatAspersion(r.diamAsperseurUtilise)} unit="m" />
           </div>
         </div>
 
@@ -148,15 +156,15 @@ function AspersionForm({ largeur, longueur, ai, onChange }) {
         <div className="text-xs font-semibold text-[#60707d] uppercase tracking-wide mb-2">Réseau de tuyaux</div>
         <div className="grid grid-cols-2 gap-3 mb-4">
           <ResultCard label="Nombre de tuyaux" value={r.nTuyaux} unit="" />
-          <ResultCard label="Écartement entre tuyaux" value={r.ecartementTuyaux.toFixed(2)} unit="m" />
-          <ResultCard label="Position 1er tuyau (bord latéral)" value={r.positionPremierTuyau.toFixed(2)} unit="m" />
-          <ResultCard label="Longueur d'un tuyau" value={r.longueurUneRampe.toFixed(1)} unit="m" />
+          <ResultCard label="Écartement entre tuyaux" value={formatAspersion(r.ecartementTuyaux)} unit="m" />
+          <ResultCard label="Position 1er tuyau (bord latéral)" value={formatAspersion(r.positionPremierTuyau)} unit="m" />
+          <ResultCard label="Longueur d'un tuyau" value={formatAspersion(r.longueurUneRampe, 1)} unit="m" />
         </div>
 
         <div className="text-xs font-semibold text-[#60707d] uppercase tracking-wide mb-2">Asperseurs (motif triangulaire, R×1,732)</div>
         <div className="grid grid-cols-2 gap-3 mb-4">
-          <ResultCard label="Espacement théorique idéal" value={r.espacementTheorique.toFixed(2)} unit="m" />
-          <ResultCard label="Espacement réel (E_asp)" value={r.E_asp.toFixed(2)} unit="m" />
+          <ResultCard label="Espacement théorique idéal" value={formatAspersion(r.espacementTheorique)} unit="m" />
+          <ResultCard label="Espacement réel (E_asp)" value={formatAspersion(r.E_asp)} unit="m" />
           <ResultCard label="Asperseurs / tuyau IMPAIR" value={r.A_impair} unit="" />
           <ResultCard label="Asperseurs / tuyau PAIR" value={r.A_pair} unit="" />
         </div>
@@ -166,15 +174,15 @@ function AspersionForm({ largeur, longueur, ai, onChange }) {
 
         <div className="grid grid-cols-2 gap-3 mb-3">
           <ResultCard big label="Nombre total d'asperseurs" value={r.nbArroseursTotal} unit="" />
-          <ResultCard label="Pluviométrie" value={r.pluviometrie.toFixed(1)} unit="mm/h" />
+          <ResultCard label="Pluviométrie" value={formatAspersion(r.pluviometrie, 1)} unit="mm/h" />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <ResultCard label="Q parcelle (brut)" value={r.qParcelleBrut.toFixed(3)} unit="m³/h" />
-          <ResultCard label="Q primaire (÷ mode)" value={r.qPrimaire.toFixed(3)} unit="m³/h" />
+          <ResultCard label="Q parcelle (brut)" value={formatAspersion(r.qParcelleBrut, 3)} unit="m³/h" />
+          <ResultCard label="Q primaire (÷ mode)" value={formatAspersion(r.qPrimaire, 3)} unit="m³/h" />
         </div>
         <div className="grid grid-cols-1 gap-3 mt-3">
-          <ResultCard big label={`Q parcelle retenu — conservation "${conserverDebit}"`} value={r.qParcelleRetenu.toFixed(3)} unit="m³/h" />
-          <ResultCard big label="Q motopompe requis" value={r.qMotopompe ? r.qMotopompe.toFixed(3) : "—"} unit="m³/h" />
+          <ResultCard big label={`Q parcelle retenu — conservation "${conserverDebit}"`} value={formatAspersion(r.qParcelleRetenu, 3)} unit="m³/h" />
+          <ResultCard big label="Q motopompe requis" value={formatAspersion(r.qMotopompe, 3)} unit="m³/h" />
         </div>
       </div>
     </div>
@@ -187,7 +195,11 @@ function ConceptionContent() {
   const longueur = initLive.longueur || 100;
   const [irrigationType, setIrrigationType] = useState(initLive.irrigationType || "goutte");
 
-  const setType = (t) => { setIrrigationType(t); saveLive({ irrigationType: t }); };
+  const setType = (t) => {
+    setIrrigationType(t);
+    const inputMeta = { ...(loadLive().inputMeta || {}), irrigation_type_entered: true };
+    saveLive({ irrigationType: t, inputMeta });
+  };
 
   return (
     <div className="min-h-screen bg-[#f5f8f6]">

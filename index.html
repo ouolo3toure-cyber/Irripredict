@@ -29,7 +29,12 @@ function HomeContent() {
   const [projectNameInput, setProjectNameInput] = useState("");
 
   const update = (partial) => {
-    const next = saveLive(partial);
+    const inputMeta = {
+      ...(loadLive().inputMeta || {}),
+      ...(Object.prototype.hasOwnProperty.call(partial, "largeur") ? { width_entered: true } : {}),
+      ...(Object.prototype.hasOwnProperty.call(partial, "longueur") ? { length_entered: true } : {}),
+    };
+    const next = saveLive({ ...partial, inputMeta });
     setLive(next);
   };
 
@@ -59,8 +64,21 @@ function HomeContent() {
 
   const handleNewProject = () => {
     const next = saveLive({ largeur: 100, longueur: 100, cropName: "", irrigationType: "goutte",
+      inputMeta: { width_entered: false, length_entered: false, irrigation_type_entered: false },
+      project_id: null, plot_id: null, crop_id: null, system_id: null, design_id: null, design_version: "1", design_status: "draft",
       bilanInputs: null, dripInputs: null, aspersionInputs: null, networkInputs: null, costInputs: null });
     setLive(next);
+  };
+
+  const designProfile = buildBaseDesignReference(live);
+
+  const handleExport = () => {
+    const result = exportDesignProfile(live);
+    if (!result) {
+      alert("Impossible d’exporter le profil design pour le moment.");
+      return;
+    }
+    alert(`Profil exporté : ${result.fileName}`);
   };
 
   return (
@@ -81,6 +99,34 @@ function HomeContent() {
           <Field label="Longueur parcelle" unit="m">
             <NumberInput value={live.longueur} onChange={(v) => update({ longueur: v })} step="0.1" />
           </Field>
+        </div>
+
+        <div className="rounded-xl border border-[#dce5e1] bg-white p-5 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div>
+              <div className="text-sm font-semibold text-[#17324d]">Design Reference V1.0</div>
+              <div className="text-xs text-[#60707d]">Source de vérité conceptuelle pour IRRI-PILOT</div>
+            </div>
+            <button onClick={handleExport} className="bg-[#17324d] text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#10263d]">Exporter JSON</button>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            <div className="rounded-lg bg-[#f5f8f6] p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[#60707d] mb-1">Design ID</div>
+              <div className="font-mono text-[#17324d] break-all">{live.design_id || designProfile.design_reference.metadata.design_id}</div>
+            </div>
+            <div className="rounded-lg bg-[#f5f8f6] p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[#60707d] mb-1">Version</div>
+              <div className="font-mono text-[#17324d]">{live.design_version || designProfile.design_reference.metadata.design_version}</div>
+            </div>
+            <div className="rounded-lg bg-[#f5f8f6] p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[#60707d] mb-1">Statut</div>
+              <div className="text-[#17324d] font-medium">{live.design_status || designProfile.design_reference.metadata.design_status}</div>
+            </div>
+            <div className="rounded-lg bg-[#f5f8f6] p-3">
+              <div className="text-[10px] uppercase tracking-wide text-[#60707d] mb-1">Surface</div>
+              <div className="font-mono text-[#17324d]">{((live.largeur || 0) * (live.longueur || 0) / 10000).toFixed(3)} ha</div>
+            </div>
+          </div>
         </div>
 
         <div className="rounded-xl border border-[#dce5e1] bg-white p-5">
