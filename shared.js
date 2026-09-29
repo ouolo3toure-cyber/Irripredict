@@ -310,7 +310,7 @@ function StackedAreaChart({ monthly }) {
    partagé qui fonctionne de façon fiable partout. sessionStorage est
    partagé entre toutes les pages de ce site (même origine), donc l'accès
    se déverrouille une fois pour toute la session de navigation. */
-const SITE_PASSWORD = "hydro2026"; // <-- change cette valeur si besoin
+const SITE_PASSWORD = "hydro1959"; // <-- change cette valeur si besoin
 const SESSION_KEY = "irripredict_unlocked";
 
 function IdentityGate({ children }) {
